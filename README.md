@@ -15,7 +15,7 @@
 ## 1. 연동 순서
 
 1. Unity Package Manager에서 XRLumina SDK 패키지를 프로젝트에 추가합니다.
-2. [`XRLuminaClient.prefab`](../Runtime/Prefabs/XRLuminaClient.prefab)을 최초 실행 씬에 배치합니다.
+2. [`XRLuminaClient.prefab`](./Runtime/Prefabs/XRLuminaClient.prefab)을 최초 실행 씬에 배치합니다.
 3. Inspector에서 Camera, Head, Body를 연결합니다.
 4. XRLumina 데스크톱 앱을 실행합니다.
 5. Unity 애플리케이션을 실행합니다.
@@ -29,13 +29,13 @@
 
 ## 2. Inspector 필수 설정
 
-[`XRLuminaClient.prefab`](../Runtime/Prefabs/XRLuminaClient.prefab)에는 연동에 필요한 컴포넌트가 포함돼 있습니다.
+[`XRLuminaClient.prefab`](./Runtime/Prefabs/XRLuminaClient.prefab)에는 연동에 필요한 컴포넌트가 포함돼 있습니다.
 
-### [XRLuminaClientController](../Runtime/Client/XRLuminaClientController.cs)
+### [XRLuminaClientController](./Runtime/Client/XRLuminaClientController.cs)
 
 데스크톱 앱 연결, 세션, 테스트 시작·종료 요청과 명령 수신을 담당합니다. 별도의 연결 메서드는 호출하지 않습니다.
 
-### [MirroringController](../Runtime/Features/MirroringController.cs)
+### [MirroringController](./Runtime/Features/MirroringController.cs)
 
 | 항목 | 설정 |
 | --- | --- |
@@ -47,7 +47,7 @@
 
 `Source Camera`가 비어 있으면 활성 `Main Camera`가 사용될 수 있지만 명시적으로 연결하는 것을 권장합니다.
 
-### [InteractionController](../Runtime/Features/InteractionController.cs)
+### [InteractionController](./Runtime/Features/InteractionController.cs)
 
 | 항목 | 설정 |
 | --- | --- |
@@ -69,7 +69,7 @@ XR Origin 또는 Player Root  → Body
 
 `Head`와 `Body` 중 하나가 비어 있으면 `Main Camera`가 대신 사용될 수 있습니다. 같은 값이 중복 기록되지 않도록 두 참조를 모두 지정하십시오.
 
-### [EyeTrackingController](../Runtime/Features/EyeTrackingController.cs)
+### [EyeTrackingController](./Runtime/Features/EyeTrackingController.cs)
 
 | 항목 | 설정 |
 | --- | --- |
@@ -284,7 +284,7 @@ public sealed class XRLuminaRigBinder : MonoBehaviour
 
 ## 8. 샘플 씬
 
-샘플 씬은 [`XRLuminaSampleScene.unity`](../Samples~/BasicSample/XRLuminaSampleScene.unity)에서 확인할 수 있습니다.
+샘플 씬은 [`XRLuminaSampleScene.unity`](./Samples~/BasicSample/XRLuminaSampleScene.unity)에서 확인할 수 있습니다.
 
 샘플 씬에는 데스크톱·VR 이동이 가능한 플레이어와 인터랙션 종류별 타깃 5개가 배치돼 있습니다.
 
@@ -311,7 +311,7 @@ public sealed class XRLuminaRigBinder : MonoBehaviour
 | 오른손 조이스틱 X축 | Sample Player 좌우 회전 |
 | 오른손 트리거 | HMD Camera 정면의 타깃 실행 |
 
-위 조작은 [`XRLuminaSamplePlayerController`](../Samples~/BasicSample/XRLuminaSamplePlayerController.cs)에 구현된 샘플 전용 기능입니다. 타깃 이벤트 연결은 [`XRLuminaSampleInteractionTarget`](../Samples~/BasicSample/XRLuminaSampleInteractionTarget.cs)에서 확인할 수 있습니다. XRLumina SDK가 프로젝트의 이동 또는 타깃 선택 방식을 강제하지 않습니다.
+위 조작은 [`XRLuminaSamplePlayerController`](./Samples~/BasicSample/XRLuminaSamplePlayerController.cs)에 구현된 샘플 전용 기능입니다. 타깃 이벤트 연결은 [`XRLuminaSampleInteractionTarget`](./Samples~/BasicSample/XRLuminaSampleInteractionTarget.cs)에서 확인할 수 있습니다. XRLumina SDK가 프로젝트의 이동 또는 타깃 선택 방식을 강제하지 않습니다.
 
 샘플 타깃은 HMD Camera 정면에서 최대 `6m`까지 Raycast해 선택합니다. 컨트롤러가 가리키는 방향을 사용하는 방식이 아닙니다.
 
