@@ -23,7 +23,7 @@
 7. 데스크톱 앱 또는 Unity에서 테스트를 시작합니다.
 8. 테스트 종료 명령을 받은 뒤 Unity 콘텐츠를 종료 처리합니다.
 
-[{XRLuminaClient 프리팹을 씬 Hierarchy에 배치한 화면} 스크린샷]
+![XRLuminaClient 프리팹을 씬 Hierarchy에 배치한 화면](./README/Screenshot%202026-09-10%20at%2020.03.35.png)
 
 `XRLuminaClient`는 씬이 변경돼도 유지됩니다. 씬마다 중복 배치하지 마십시오.
 
@@ -44,6 +44,8 @@
 | Width / Height | 전송할 화면 크기 |
 | Frames Per Second | 화면 전송 FPS |
 | Jpeg Quality | 전송 이미지 품질 |
+
+![MirroringController Inspector 설정 화면](./README/Screenshot%202026-09-10%20at%2020.05.41.png)
 
 `Source Camera`가 비어 있으면 활성 `Main Camera`가 사용될 수 있지만 명시적으로 연결하는 것을 권장합니다.
 
@@ -79,8 +81,6 @@ XR Origin 또는 Player Root  → Body
 | Frames Per Second | 시선 기록 FPS |
 
 시선 측정 대상 오브젝트에는 Collider가 있어야 하며 해당 레이어가 `Gaze Layer Mask`에 포함돼야 합니다.
-
-[{XRLuminaClient Inspector에서 Source Camera, Head, Body를 연결한 화면} 스크린샷]
 
 ## 3. 데스크톱 앱 연결과 세션
 
@@ -193,7 +193,7 @@ public sealed class XRLuminaTestLifecycle : MonoBehaviour
 
 Unity에서 시작 버튼을 눌렀더라도 `RequestStart()` 호출 즉시 콘텐츠를 시작하지 말고 `start` 명령을 받은 시점에 시작하는 것을 권장합니다. 종료도 동일하게 `finish` 명령을 기준으로 처리합니다.
 
-[{데스크톱 앱에서 장치를 선택하고 테스트를 시작할 수 있는 화면} 스크린샷]
+![데스크톱 앱에서 장치를 선택하고 테스트를 시작할 수 있는 화면](./README/Screenshot%202026-09-10%20at%2020.07.37.png)
 
 ## 5. 측정 데이터 동작 시점
 
@@ -288,9 +288,7 @@ public sealed class XRLuminaRigBinder : MonoBehaviour
 
 샘플 씬에는 데스크톱·VR 이동이 가능한 플레이어와 인터랙션 종류별 타깃 5개가 배치돼 있습니다.
 
-[{XRLuminaSampleScene의 전체 Hierarchy 구성 화면} 스크린샷]
-
-[{Game View에서 인터랙션 타깃 5개가 보이는 화면} 스크린샷]
+![XRLuminaSampleScene의 Hierarchy와 인터랙션 타깃이 표시된 Game View](./README/Screenshot%202026-09-10%20at%2020.08.52.png)
 
 ### 샘플 씬 전용 데스크톱 조작
 
