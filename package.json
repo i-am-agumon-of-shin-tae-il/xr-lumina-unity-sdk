@@ -1,0 +1,24 @@
+{
+  "name": "com.ninefive.xrlumina",
+  "version": "1.0.0",
+  "displayName": "XRLumina Unity SDK",
+  "description": "Unity XR integration SDK for XRLumina Desktop App.",
+  "unity": "6000.2",
+  "dependencies": {
+    "com.unity.ai.navigation": "2.0.9",
+    "com.unity.collections": "2.5.7",
+    "com.unity.nuget.newtonsoft-json": "3.2.1",
+    "com.unity.render-pipelines.universal": "17.3.0",
+    "com.unity.modules.ai": "1.0.0",
+    "com.unity.modules.imageconversion": "1.0.0",
+    "com.unity.modules.physics": "1.0.0",
+    "com.unity.modules.xr": "1.0.0"
+  },
+  "samples": [
+    {
+      "displayName": "Basic Sample",
+      "description": "XRLumina desktop and VR integration sample.",
+      "path": "Samples~/BasicSample"
+    }
+  ]
+}
