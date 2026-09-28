@@ -8,7 +8,6 @@ namespace XRLumina.Features
     public sealed class MirroringController : MonoBehaviour
     {
         [SerializeField] private bool streamEnabled = true;
-        [SerializeField] private Camera sourceCamera;
         [SerializeField] private int width = 640;
         [SerializeField] private int height = 480;
         [SerializeField] private int framesPerSecond = 20;
@@ -21,7 +20,8 @@ namespace XRLumina.Features
         /// <summary>클라이언트 서비스에 연결하고 미러링 상태 이벤트를 구독한다.</summary>
         private void Start()
         {
-            _client = XRLuminaClientController.Instance?.Service;
+            var client = XRLuminaClientController.Instance;
+            _client = client?.Service;
             if (_client == null)
             {
                 Debug.LogError("[XRLumina] Client service is unavailable.", this);
@@ -31,7 +31,7 @@ namespace XRLumina.Features
             _service = new MirroringService(
                 _client,
                 streamEnabled,
-                sourceCamera,
+                () => client != null ? client.HeadCamera : null,
                 width,
                 height,
                 framesPerSecond,

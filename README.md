@@ -16,7 +16,7 @@
 
 1. Unity Package Manager에서 XRLumina SDK 패키지를 프로젝트에 추가합니다.
 2. [`XRLuminaClient.prefab`](./Runtime/Prefabs/XRLuminaClient.prefab)을 최초 실행 씬에 배치합니다.
-3. Inspector에서 Camera, Head, Body를 연결합니다.
+3. XRLuminaClientController의 Head에 HMD Camera Transform, Body에 플레이어 루트를 연결합니다.
 4. XRLumina 데스크톱 앱을 실행합니다.
 5. Unity 애플리케이션을 실행합니다.
 6. 데스크톱 앱에서 연결된 장치를 선택합니다.
@@ -35,28 +35,12 @@
 
 데스크톱 앱 연결, 세션, 테스트 시작·종료 요청과 명령 수신을 담당합니다. 별도의 연결 메서드는 호출하지 않습니다.
 
-### [MirroringController](./Runtime/Features/MirroringController.cs)
-
 | 항목 | 설정 |
 | --- | --- |
-| Stream Enabled | 화면 미러링을 사용하면 활성화 |
-| Source Camera | 데스크톱 앱에 표시할 게임 Camera |
-| Width / Height | 전송할 화면 크기 |
-| Frames Per Second | 화면 전송 FPS |
-| Jpeg Quality | 전송 이미지 품질 |
-
-![MirroringController Inspector 설정 화면](./README/Screenshot%202026-09-10%20at%2020.05.41.png)
-
-`Source Camera`가 비어 있으면 활성 `Main Camera`가 사용될 수 있지만 명시적으로 연결하는 것을 권장합니다.
-
-### [InteractionController](./Runtime/Features/InteractionController.cs)
-
-| 항목 | 설정 |
-| --- | --- |
-| Head | HMD Camera 또는 머리 Transform |
+| Head | HMD Camera Transform |
 | Body | Player Root 또는 XR Origin Transform |
-| Frames Per Second | 위치·회전 기록 FPS |
-| Joystick Deadzone | 조이스틱 제스처 감지 임계값 |
+
+![XRLuminaClientController의 Head와 Body 연결 화면](./README/Screenshot%202026-09-28%20at%2014.10.59.png)
 
 일반적인 XR Rig 연결은 다음과 같습니다.
 
@@ -69,13 +53,38 @@ XR Origin 또는 Player Root  → Body
 - `Head.rotation`: 머리 회전 분석에 사용
 - `Body.position`: 이동 거리와 이동 속도 분석에 사용
 
-`Head`와 `Body` 중 하나가 비어 있으면 `Main Camera`가 대신 사용될 수 있습니다. 같은 값이 중복 기록되지 않도록 두 참조를 모두 지정하십시오.
+`Head`와 `Body`를 모두 지정하십시오. 누락된 참조를 HMD나 다른 카메라로 대체하지 않습니다. 아이트래킹 구간은 `Body.position`으로 나누며 시선과 캡처는 HMD를 사용합니다.
+
+### [MirroringController](./Runtime/Features/MirroringController.cs)
+
+| 항목 | 설정 |
+| --- | --- |
+| Stream Enabled | 화면 미러링을 사용하면 활성화 |
+| Width / Height | 전송할 화면 크기 |
+| Frames Per Second | 화면 전송 FPS |
+| Jpeg Quality | 전송 이미지 품질 |
+
+![MirroringController Inspector 설정 화면](./README/Screenshot%202026-09-28%20at%2014.12.22.png)
+
+미러링·아이트래킹·휴리스틱 캡처는 모두 `XRLuminaClientController.Head`에 붙은 Camera를 사용합니다.
+
+### [InteractionController](./Runtime/Features/InteractionController.cs)
+
+| 항목 | 설정 |
+| --- | --- |
+| Frames Per Second | 위치·회전 기록 FPS |
+| Joystick Deadzone | 조이스틱 제스처 감지 임계값 |
+| Heuristic Capture Camera | 조건 충족 시 PNG로 캡처할 HMD Camera. 비어 있으면 `Camera.main` 사용 |
+| Stationary Duration Seconds / Movement Threshold | 멈춤 판정 시간과 XZ 누적 이동거리 기준 |
+| Yaw Window Seconds / Required Reversals / Minimum Swing Degrees | 머리 방향 반전 판정 기준 |
+| Interaction Window Seconds / Required Count | 동일 대상·입력 반복 판정 기준 |
+| Interaction Layer Mask / Max Distance | Controller 자동 감지 시 정면 Raycast 범위 |
+| Heuristic Capture Width / Height | 캡처 PNG 해상도 |
 
 ### [EyeTrackingController](./Runtime/Features/EyeTrackingController.cs)
 
 | 항목 | 설정 |
 | --- | --- |
-| Source Camera | 시선 측정에 사용할 HMD Camera |
 | Gaze Layer Mask | 시선 측정 대상 레이어 |
 | Max Distance | 시선 측정 최대 거리 |
 | Frames Per Second | 시선 기록 FPS |
@@ -124,6 +133,7 @@ public sealed class XRLuminaSessionExample : MonoBehaviour
 | --- | --- |
 | `Session` | 현재 세션 정보. 준비 전에는 `null`일 수 있음 |
 | `IsAuthenticated` | 세션 인증 완료 여부 |
+| `IsMeasuring` | SDK가 관리하는 현재 측정 여부 |
 | `SessionReady` | 새 세션이 준비됐을 때 발생하는 이벤트 |
 
 ## 4. 테스트 시작과 종료
@@ -197,12 +207,12 @@ Unity에서 시작 버튼을 눌렀더라도 `RequestStart()` 호출 즉시 콘�
 
 ## 5. 측정 데이터 동작 시점
 
-| 상태 | 화면 미러링 | 위치·인터랙션 | 시선 측정 |
-| --- | --- | --- | --- |
-| 장치 연결 전 | 중지 | 중지 | 중지 |
-| 세션 선택 | 시작 | 대기 | 대기 |
-| `start` 수신 | 유지 | 기록 시작 | 기록 시작 |
-| `finish` 수신 | 중지 | 기록 종료 및 전송 | 기록 종료 및 전송 |
+| 상태 | 화면 미러링 | 위치·인터랙션 | 시선 측정 | 휴리스틱 캡처 |
+| --- | --- | --- | --- | --- |
+| 장치 연결 전 | 중지 | 중지 | 중지 | 중지 |
+| 세션 선택 | 시작 | 대기 | 대기 | 대기 |
+| `start` 수신 | 유지 | 기록 시작 | 기록 시작 | 조건 추적 시작 |
+| `finish` 수신 | 중지 | 기록 종료 및 전송 | 기록 종료 및 전송 | PNG 전송 및 저장 요청 |
 
 테스트 데이터는 데스크톱 앱이 전달한 세션에 연결됩니다. 세션 선택과 테스트 시작이 완료되기 전에 발생한 이벤트는 정상적인 테스트 데이터로 처리되지 않을 수 있습니다.
 
@@ -255,13 +265,41 @@ Unity UI Button, XR Interaction Toolkit의 Select 이벤트, 자체 Raycast 또�
 
 자동 감지되는 입력에서 `RecordInteractionEvent()`도 직접 호출하면 동일 조작이 중복 기록될 수 있습니다.
 
+### 휴리스틱 화면 캡처
+
+`InteractionController`는 테스트 측정 중 HMD 위치·Yaw와 Controller 입력을 함께 추적하고 다음 조건에서 HMD 카메라 화면을 PNG로 캡처합니다.
+
+| 조건 | 판정 기준 |
+| --- | --- |
+| 사용자 멈춤 | HMD의 Y축을 제외한 XZ 누적 이동거리가 3초 동안 0.15 Unity Unit 이하 |
+| 머리 움직임 변화 | 5초 이내 좌우 Yaw 방향이 3회 이상 반전되고 각 방향의 회전량이 30도 이상 |
+| 반복 인터랙션 | 동일한 GameObject와 동일한 Controller 입력이 5초 이내 3회 이상 발생 |
+
+캡처 이미지는 `heuristic:screenshot` 바이너리 패킷으로 데스크톱에 전송됩니다. 테스트 종료 시 `heuristics` flush가 전송되며, 데스크톱의 S3 업로드와 스프링 서버 저장이 완료돼야 종료 흐름이 계속됩니다.
+
+데스크톱은 조립된 PNG를 S3에 업로드하기 전에 `{Electron userData}/debug/heuristics/{projectMemberSeq}`에도 저장합니다. 실제 절대 경로는 데스크톱 로그의 `[heuristics] 로컬 저장 완료(path=...)`에서 확인할 수 있습니다. S3 업로드가 끝나면 공통 `[S3 업로드] S3 업로드 완료(..., url=...)` 로그에 대시보드와 분석에서 사용하는 조회용 `file_url`이 출력됩니다. 디버그 파일 저장에 실패해도 S3 업로드와 서버 저장은 계속 진행됩니다.
+
+기본 캡처 해상도는 1280×720이고 `InteractionController` Inspector에서 해상도, 판정 기준, Raycast LayerMask와 최대 거리를 조정할 수 있습니다. `Heuristic Capture Camera`가 비어 있으면 `Camera.main`을 사용합니다.
+
+Controller의 Primary, Secondary, Trigger, Grip 입력은 HMD 카메라 정면 Raycast 대상과 함께 자동으로 반복 여부를 판정합니다. 게임 로직에서 실제 상호작용 성공 대상을 알고 있는 경우에는 다음 오버로드를 사용합니다.
+
+```csharp
+InteractionController.Instance?.RecordInteractionEvent(
+    XRLuminaInteractionEventType.Object,
+    targetGameObject,
+    "Trigger"
+);
+```
+
+`targetGameObject`와 `controllerInput` 문자열이 모두 같은 호출만 하나의 반복 인터랙션으로 계산합니다. 같은 입력을 자동 감지와 직접 호출 양쪽에서 기록하면 중복 집계될 수 있으므로 게임의 실제 성공 시점을 직접 연결한 경우 자동 Raycast 대상과 입력 이름이 겹치지 않게 구성합니다.
+
 ## 7. 런타임 XR Rig 연결
 
 XR Rig가 런타임에 생성되거나 씬 전환으로 변경되는 경우 `Head`와 `Body`를 다시 연결합니다.
 
 ```csharp
 using UnityEngine;
-using XRLumina.Features;
+using XRLumina.Client;
 
 public sealed class XRLuminaRigBinder : MonoBehaviour
 {
@@ -271,8 +309,8 @@ public sealed class XRLuminaRigBinder : MonoBehaviour
     /// <summary>현재 XR Rig를 SDK 인터랙션 추적 대상으로 연결한다.</summary>
     private void Start()
     {
-        InteractionController.Instance.SetHead(hmdCamera.transform);
-        InteractionController.Instance.SetBody(playerRoot);
+        XRLuminaClientController.Instance.SetHead(hmdCamera.transform);
+        XRLuminaClientController.Instance.SetBody(playerRoot);
     }
 }
 ```
@@ -316,16 +354,16 @@ public sealed class XRLuminaRigBinder : MonoBehaviour
 ## 9. 연동 확인 목록
 
 - `XRLuminaClient`가 씬에 하나만 배치돼 있는가
-- Mirroring의 `Source Camera`가 실제 게임 Camera인가
-- Interaction의 `Head`가 HMD Camera인가
-- Interaction의 `Body`가 Player Root 또는 XR Origin인가
-- EyeTracking의 `Source Camera`가 HMD Camera인가
+- Client의 `Head`에 실제 HMD Camera 컴포넌트가 있는가
+- Client의 `Head`가 HMD Camera인가
+- Client의 `Body`가 Player Root 또는 XR Origin인가
 - 시선 대상에 Collider가 있는가
 - 시선 대상 Layer가 `Gaze Layer Mask`에 포함돼 있는가
 - 데스크톱 앱에서 Unity 장치가 연결 상태로 표시되는가
 - 데스크톱 앱에서 올바른 테스트 세션을 선택했는가
 - Unity 콘텐츠 상태를 `OnCommand`의 `start`, `finish`에 맞춰 처리하는가
 - 테스트 시작 후 인터랙션 이벤트를 기록하는가
+- 휴리스틱 캡처 Camera와 반복 인터랙션 대상 Collider·Layer가 올바른가
 
 ## 10. 문제 해결
 
@@ -345,12 +383,12 @@ public sealed class XRLuminaRigBinder : MonoBehaviour
 ### 미러링 화면이 나타나지 않음
 
 - `Stream Enabled`가 활성화돼 있는지 확인합니다.
-- `Source Camera`가 활성 상태인지 확인합니다.
+- `XRLuminaClientController.Head`의 Camera가 활성 상태인지 확인합니다.
 - 데스크톱 앱에서 장치와 세션이 선택됐는지 확인합니다.
 
 ### Head와 Body 값이 동일함
 
-`Head` 또는 `Body`가 비어 있으면 `Main Camera`가 대신 사용될 수 있습니다. `Head`에는 HMD Camera, `Body`에는 Player Root를 각각 지정합니다.
+`Head`에는 HMD Camera Transform, `Body`에는 Player Root를 각각 지정합니다. 두 참조에 같은 Transform을 지정하지 않습니다.
 
 ### 인터랙션 이벤트가 기록되지 않음
 
@@ -365,6 +403,6 @@ VR 버튼과 조이스틱은 SDK가 자동 감지합니다. 같은 입력 처리
 
 ### 시선 데이터가 기록되지 않음
 
-- `Source Camera`가 올바르게 연결됐는지 확인합니다.
+- `XRLuminaClientController.Head`와 `Body`가 올바르게 연결됐는지 확인합니다.
 - 시선 대상의 Collider와 Layer를 확인합니다.
 - 테스트가 시작 상태인지 확인합니다.

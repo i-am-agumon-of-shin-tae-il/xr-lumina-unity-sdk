@@ -1176,22 +1176,14 @@ PrefabInstance:
       propertyPath: m_LocalRotation.z
       value: 0
       objectReference: {fileID: 0}
-    - target: {fileID: 11400001, guid: 7167647b56704f0da8e92b8604653077, type: 3}
-      propertyPath: sourceCamera
-      value: 
-      objectReference: {fileID: 1102}
-    - target: {fileID: 11400002, guid: 7167647b56704f0da8e92b8604653077, type: 3}
+    - target: {fileID: 11400000, guid: 7167647b56704f0da8e92b8604653077, type: 3}
       propertyPath: body
       value: 
       objectReference: {fileID: 1001}
-    - target: {fileID: 11400002, guid: 7167647b56704f0da8e92b8604653077, type: 3}
+    - target: {fileID: 11400000, guid: 7167647b56704f0da8e92b8604653077, type: 3}
       propertyPath: head
       value: 
       objectReference: {fileID: 1101}
-    - target: {fileID: 11400003, guid: 7167647b56704f0da8e92b8604653077, type: 3}
-      propertyPath: sourceCamera
-      value: 
-      objectReference: {fileID: 1102}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []

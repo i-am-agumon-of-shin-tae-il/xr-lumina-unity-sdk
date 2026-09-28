@@ -7,7 +7,6 @@ namespace XRLumina.Features
     /// <summary>인스펙터의 아이트래킹 설정을 런타임 서비스에 연결하는 SDK 컴포넌트.</summary>
     public sealed class EyeTrackingController : MonoBehaviour
     {
-        [SerializeField] private Camera sourceCamera;
         [SerializeField] private LayerMask gazeLayerMask = ~0;
         [SerializeField] private float maxDistance = 100f;
         [SerializeField] private int framesPerSecond = 5;
@@ -18,6 +17,8 @@ namespace XRLumina.Features
         [SerializeField] private int panoramaCubemapSize = 512;
         [SerializeField] private int captureChunkSize = 64 * 1024;
 
+        private XRLuminaClientController _rig;
+        private bool _warnedMissingMovementSource;
         private EyeTrackingService _service;
         private XRLuminaClientService _client;
         private Coroutine _recordingCoroutine;
@@ -25,7 +26,8 @@ namespace XRLumina.Features
         /// <summary>클라이언트 서비스에 연결하고 측정 상태 이벤트를 구독한다.</summary>
         private void Start()
         {
-            _client = XRLuminaClientController.Instance?.Service;
+            _rig = XRLuminaClientController.Instance;
+            _client = _rig?.Service;
             if (_client == null)
             {
                 Debug.LogError("[XRLumina] Client service is unavailable.", this);
@@ -34,7 +36,8 @@ namespace XRLumina.Features
             }
             _service = new EyeTrackingService(
                 _client,
-                sourceCamera,
+                () => _rig != null ? _rig.HeadCamera : null,
+                ResolveMovementSource,
                 gazeLayerMask,
                 maxDistance,
                 framesPerSecond,
@@ -46,6 +49,22 @@ namespace XRLumina.Features
                 captureChunkSize);
             _client.MeasurementStarted += StartFeature;
             _client.MeasurementFinished += FinishFeature;
+        }
+
+        /// <summary>아이트래킹 이동 판정에 사용할 플레이어 Transform을 반환한다.</summary>
+        private Transform ResolveMovementSource()
+        {
+            var source = _rig != null ? _rig.Body : null;
+            if (source == null && !_warnedMissingMovementSource)
+            {
+                Debug.LogWarning("[XRLumina] 아이트래킹 이동 판정용 플레이어 루트가 없습니다. XRLuminaClientController의 Body를 연결하세요.", this);
+                _warnedMissingMovementSource = true;
+            }
+            else if (source != null)
+            {
+                _warnedMissingMovementSource = false;
+            }
+            return source;
         }
 
         /// <summary>아이트래킹 측정 시작을 서비스에 전달한다.</summary>

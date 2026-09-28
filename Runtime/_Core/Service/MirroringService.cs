@@ -11,7 +11,7 @@ namespace XRLumina._Core.Service
     {
         private readonly DeviceMessageSender _sender;
         private readonly bool _streamEnabled;
-        private readonly Camera _sourceCamera;
+        private readonly System.Func<Camera> _resolveCamera;
         private readonly int _width;
         private readonly int _height;
         private readonly int _framesPerSecond;
@@ -27,7 +27,7 @@ namespace XRLumina._Core.Service
         internal MirroringService(
             XRLuminaClientService client,
             bool streamEnabled,
-            Camera sourceCamera,
+            System.Func<Camera> resolveCamera,
             int width,
             int height,
             int framesPerSecond,
@@ -35,7 +35,7 @@ namespace XRLumina._Core.Service
         {
             _sender = client.MessageSender;
             _streamEnabled = streamEnabled;
-            _sourceCamera = sourceCamera;
+            _resolveCamera = resolveCamera;
             _width = width;
             _height = height;
             _framesPerSecond = framesPerSecond;
@@ -166,26 +166,11 @@ namespace XRLumina._Core.Service
             _bufferHeight = 0;
         }
 
-        /// <summary>지정 카메라, 메인 카메라, 활성 카메라 순서로 캡처 대상을 찾는다.</summary>
+        /// <summary>클라이언트에 연결된 활성 HMD 카메라를 캡처 대상으로 반환한다.</summary>
         private Camera ResolveCamera()
         {
-            if (_sourceCamera != null && _sourceCamera.isActiveAndEnabled)
-            {
-                return _sourceCamera;
-            }
-            if (Camera.main != null && Camera.main.isActiveAndEnabled)
-            {
-                return Camera.main;
-            }
-            var cameras = UnityEngine.Object.FindObjectsByType<Camera>(FindObjectsSortMode.None);
-            foreach (var camera in cameras)
-            {
-                if (camera != null && camera.isActiveAndEnabled)
-                {
-                    return camera;
-                }
-            }
-            return null;
+            var camera = _resolveCamera?.Invoke();
+            return camera != null && camera.isActiveAndEnabled ? camera : null;
         }
     }
 }
