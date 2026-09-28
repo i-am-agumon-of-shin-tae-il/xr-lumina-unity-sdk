@@ -2,7 +2,7 @@ using System;
 
 namespace XRLumina._Core.Model
 {
-    /// <summary>파노라마 캡처 시점의 카메라 자세 JSON 모델.</summary>
+    /// <summary>시선과 동일한 캡처 기준 좌표계의 카메라 자세 JSON 모델.</summary>
     [Serializable]
     internal sealed class CameraPose
     {
