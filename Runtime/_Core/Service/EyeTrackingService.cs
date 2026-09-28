@@ -34,6 +34,7 @@ namespace XRLumina._Core.Service
         private Vector3 _positionAnchor;
         private byte[] _stationaryPanorama;
         private Quaternion _panoramaRotation;
+        private Vector3 _panoramaPosition;
         private TimedGazeFrame? _segmentStartSample;
 
         /// <summary>Unity 실행 호스트, SDK 의존성, 시선 기록 설정으로 서비스를 생성한다.</summary>
@@ -174,10 +175,13 @@ namespace XRLumina._Core.Service
                 return;
             }
 
-            var panoramaRotation = GetCorrectedPanoramaRotation(
-                camera.transform.rotation,
-                startSample.Value.Rotation);
-            var panorama = CapturePanorama(camera, panoramaRotation);
+            var panoramaPosition = startSample.Value.Position;
+            var forward = GetLevelRotation(startSample.Value.Rotation) * Vector3.forward;
+            var width = Mathf.Max(1, _panoramaWidth);
+            var yaw = Mathf.Atan2(forward.x, forward.z);
+            var shiftPixels = Mathf.RoundToInt(yaw / (2f * Mathf.PI) * width);
+            var panoramaRotation = Quaternion.Euler(0f, shiftPixels * 360f / width, 0f);
+            var panorama = CapturePanorama(camera, panoramaPosition, shiftPixels);
             if (panorama == null)
             {
                 return;
@@ -185,6 +189,7 @@ namespace XRLumina._Core.Service
 
             _stationaryPanorama = panorama;
             _panoramaRotation = panoramaRotation;
+            _panoramaPosition = panoramaPosition;
             _segmentStartSample = startSample;
             _requestGaze.Clear();
             foreach (var sample in _recentGaze)
@@ -222,17 +227,6 @@ namespace XRLumina._Core.Service
             return closest;
         }
 
-        /// <summary>현재 yaw와 n ms 전 yaw의 차이를 역보정하고 pitch·roll을 제거한다.</summary>
-        private static Quaternion GetCorrectedPanoramaRotation(
-            Quaternion currentRotation,
-            Quaternion previousRotation)
-        {
-            var currentYaw = GetLevelRotation(currentRotation);
-            var previousYaw = GetLevelRotation(previousRotation);
-            var inverseGazeDelta = previousYaw * Quaternion.Inverse(currentYaw);
-            return inverseGazeDelta * currentYaw;
-        }
-
         /// <summary>회전에서 좌우 방향만 남겨 수평 정면 회전으로 변환한다.</summary>
         private static Quaternion GetLevelRotation(Quaternion rotation)
         {
@@ -259,16 +253,16 @@ namespace XRLumina._Core.Service
             SendGaze($"gaze_frames_{suffix}.json", _requestGaze);
             SendCapture($"capture_image_{suffix}.png", _stationaryPanorama, _captureChunkSize);
 
-            var pose = _segmentStartSample.Value;
+            // 전송 시선은 캡처 기준 좌표이므로 카메라도 같은 좌표계의 원점·항등 회전을 사용한다.
             var poseJson = JsonUtility.ToJson(new CameraPose
             {
-                px = pose.Position.x,
-                py = pose.Position.y,
-                pz = pose.Position.z,
-                rx = _panoramaRotation.x,
-                ry = _panoramaRotation.y,
-                rz = _panoramaRotation.z,
-                rw = _panoramaRotation.w,
+                px = 0f,
+                py = 0f,
+                pz = 0f,
+                rx = 0f,
+                ry = 0f,
+                rz = 0f,
+                rw = 1f,
             });
             SendCameraPose(
                 $"camera_pose_{suffix}.json",
@@ -277,8 +271,8 @@ namespace XRLumina._Core.Service
             _requestGaze.Clear();
         }
 
-        /// <summary>현재 카메라 위치와 정면 방향을 기준으로 360° 파노라마 PNG를 캡처한다.</summary>
-        private byte[] CapturePanorama(Camera source, Quaternion correctedRotation)
+        /// <summary>구간 시작 위치에서 파노라마를 촬영하고 정면이 중앙에 오도록 픽셀을 순환 이동한다.</summary>
+        private byte[] CapturePanorama(Camera source, Vector3 position, int shiftPixels)
         {
             if (source == null)
             {
@@ -308,8 +302,8 @@ namespace XRLumina._Core.Service
             captureCamera.stereoTargetEye = StereoTargetEyeMask.None;
             captureCamera.targetTexture = null;
             captureObject.transform.SetPositionAndRotation(
-                source.transform.position,
-                correctedRotation);
+                position,
+                Quaternion.identity);
             var previousActive = RenderTexture.active;
             try
             {
@@ -324,6 +318,8 @@ namespace XRLumina._Core.Service
                     Camera.MonoOrStereoscopicEye.Mono);
                 RenderTexture.active = panorama;
                 texture.ReadPixels(new Rect(0f, 0f, width, height), 0, 0);
+                var pixels = texture.GetPixels32();
+                texture.SetPixels32(ShiftPanoramaRows(pixels, width, height, shiftPixels));
                 texture.Apply(false, false);
                 return texture.EncodeToPNG();
             }
@@ -337,6 +333,30 @@ namespace XRLumina._Core.Service
                 UnityEngine.Object.Destroy(texture);
                 UnityEngine.Object.Destroy(captureObject);
             }
+        }
+
+        /// <summary>각 행을 왼쪽으로 순환 이동하고 경계를 넘은 픽셀을 같은 행의 반대편에 붙인다.</summary>
+        private static Color32[] ShiftPanoramaRows(Color32[] pixels, int width, int height, int shiftPixels)
+        {
+            if (pixels == null || width <= 0 || height <= 0 || (long)width * height != pixels.Length)
+            {
+                throw new ArgumentException("파노라마 크기와 픽셀 배열 길이가 일치해야 합니다.");
+            }
+
+            var shift = ((shiftPixels % width) + width) % width;
+            if (shift == 0)
+            {
+                return pixels;
+            }
+
+            var shifted = new Color32[pixels.Length];
+            for (var row = 0; row < height; row++)
+            {
+                var offset = row * width;
+                Array.Copy(pixels, offset + shift, shifted, offset, width - shift);
+                Array.Copy(pixels, offset, shifted, offset + width - shift, shift);
+            }
+            return shifted;
         }
 
         /// <summary>정지 판정 순간 n ms 전의 시선과 자세를 복원할 최근 기록만 유지한다.</summary>
@@ -420,7 +440,7 @@ namespace XRLumina._Core.Service
             yield return _client.WaitForFlushResponse(requestId, timeoutSec, onResult);
         }
 
-        /// <summary>시선 프레임 목록을 아이트래킹 시선 패킷으로 전송한다.</summary>
+        /// <summary>시선 충돌 지점을 이미지와 동일한 캡처 기준 좌표로 변환해 전송한다.</summary>
         private void SendGaze(string fileName, IReadOnlyList<XRLuminaGazeFrame> frames)
         {
             if (frames == null)
@@ -428,6 +448,7 @@ namespace XRLumina._Core.Service
                 return;
             }
 
+            var worldToCapture = Quaternion.Inverse(_panoramaRotation);
             Send(PacketType.EyeTrackingGaze, writer =>
             {
                 BinaryPayload.WriteString(writer, fileName);
@@ -444,9 +465,10 @@ namespace XRLumina._Core.Service
                     }
                     foreach (var point in points)
                     {
-                        writer.Write(point.x);
-                        writer.Write(point.y);
-                        writer.Write(point.z);
+                        var capturePoint = worldToCapture * (point - _panoramaPosition);
+                        writer.Write(capturePoint.x);
+                        writer.Write(capturePoint.y);
+                        writer.Write(capturePoint.z);
                     }
                 }
             });
