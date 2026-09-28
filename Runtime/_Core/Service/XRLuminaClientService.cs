@@ -38,6 +38,7 @@ namespace XRLumina._Core.Service
 
         internal XRLuminaSession Session => _sessionState.Session;
         internal bool IsAuthenticated => _sessionState.IsAuthenticated;
+        internal bool IsMeasuring { get; private set; }
         internal DeviceMessageSender MessageSender => _messageSender;
 
         /// <summary>연결 설정과 기능 실행 함수를 받아 SDK 런타임 서비스를 구성한다.</summary>
@@ -61,7 +62,7 @@ namespace XRLumina._Core.Service
                 _messageSender,
                 _sessionState,
                 HandleSessionAccepted,
-                _sessionState.ReceiveSessionReady,
+                HandleSessionReady,
                 HandleCommand);
             _dispatcher = new DeviceMessageDispatcher(_receiver);
             _transport.Connected += HandleConnected;
@@ -122,6 +123,7 @@ namespace XRLumina._Core.Service
         /// <summary>프레임 생산과 연결을 종료하고 이벤트 구독을 해제한다.</summary>
         public void Dispose()
         {
+            IsMeasuring = false;
             _transport.Connected -= HandleConnected;
             _transport.Disconnected -= HandleDisconnected;
             _transport.PacketReceived -= HandlePacketReceived;
@@ -139,7 +141,11 @@ namespace XRLumina._Core.Service
         /// <summary>연결 종료 후 메인 스레드에서 프레임 생산을 중지한다.</summary>
         private void HandleDisconnected()
         {
-            _mainThreadActions.Enqueue(() => Disconnected?.Invoke());
+            _mainThreadActions.Enqueue(() =>
+            {
+                IsMeasuring = false;
+                Disconnected?.Invoke();
+            });
         }
 
         /// <summary>백그라운드 통신 오류를 메인 스레드 로그로 전달한다.</summary>
@@ -154,13 +160,22 @@ namespace XRLumina._Core.Service
         {
             if (action == "start")
             {
+                IsMeasuring = true;
                 MeasurementStarted?.Invoke();
             }
             else if (action == "finish")
             {
+                IsMeasuring = false;
                 MeasurementFinished?.Invoke();
             }
             CommandReceived?.Invoke(action);
+        }
+
+        /// <summary>새 세션의 측정을 대기 상태로 전환하고 준비 이벤트를 발행한다.</summary>
+        private void HandleSessionReady()
+        {
+            IsMeasuring = false;
+            _sessionState.ReceiveSessionReady();
         }
 
         /// <summary>세션 채택을 기능 구독자에게 알린다.</summary>

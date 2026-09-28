@@ -14,6 +14,8 @@ namespace XRLumina.Client
         public event Action<string> OnCommand;
         public event Action SessionReady;
 
+        [SerializeField] private Transform head;
+        [SerializeField] private Transform body;
         [SerializeField] private int discoveryTimeoutMs = 800;
         [SerializeField] private int retryDelayMs = 1500;
 
@@ -22,8 +24,13 @@ namespace XRLumina.Client
         private readonly int _discoveryPort = 9998;
         private XRLuminaClientService _service;
 
+        public Transform Head => head;
+        public Transform Body => body;
+        public Camera HeadCamera => head != null ? head.GetComponent<Camera>() : null;
+
         public XRLuminaSession Session => _service?.Session;
         public bool IsAuthenticated => _service?.IsAuthenticated ?? false;
+        public bool IsMeasuring => _service?.IsMeasuring ?? false;
         internal XRLuminaClientService Service => _service;
 
         /// <summary>인스펙터 연결 설정으로 클라이언트 서비스를 생성한다.</summary>
@@ -55,6 +62,18 @@ namespace XRLumina.Client
         private void Update()
         {
             _service?.Tick();
+        }
+
+        /// <summary>SDK의 시선·캡처·머리 추적에 사용할 HMD Transform을 설정한다.</summary>
+        public void SetHead(Transform target)
+        {
+            head = target;
+        }
+
+        /// <summary>SDK의 이동 판정·몸 추적에 사용할 플레이어 루트를 설정한다.</summary>
+        public void SetBody(Transform target)
+        {
+            body = target;
         }
 
         /// <summary>Electron 호스트에 테스트 시작을 요청한다.</summary>

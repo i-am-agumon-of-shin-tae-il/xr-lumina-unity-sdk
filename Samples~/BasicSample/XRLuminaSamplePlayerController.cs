@@ -25,11 +25,13 @@ namespace XRLumina.Sample
         private bool _cursorInitialized;
         private bool _wasVrInteractPressed;
         private Vector3 _spawnPosition;
+        private Vector3 _initialControllerCenter;
 
         /// <summary>플레이어 이동에 사용할 CharacterController와 Camera를 준비한다.</summary>
         private void Awake()
         {
             _characterController = GetComponent<CharacterController>();
+            _initialControllerCenter = _characterController.center;
             _spawnPosition = transform.position;
             if (playerCamera == null)
             {
@@ -46,10 +48,15 @@ namespace XRLumina.Sample
             if (_vrActive)
             {
                 UpdateVrPose(headDevice);
+                UpdateVrCollisionCenter();
                 UpdateVrLocomotion();
             }
             else
             {
+                if (_characterController.center != _initialControllerCenter)
+                {
+                    _characterController.center = _initialControllerCenter;
+                }
                 UpdateDesktopLocomotion();
             }
 
@@ -85,7 +92,35 @@ namespace XRLumina.Sample
             }
         }
 
-        /// <summary>VR 컨트롤러의 왼쪽 스틱 이동과 오른쪽 스틱 회전을 적용한다.</summary>
+        /// <summary>몸의 충돌체 중심을 현재 HMD의 수평 위치에 맞춘다.</summary>
+        private void UpdateVrCollisionCenter()
+        {
+            if (playerCamera == null)
+            {
+                return;
+            }
+
+            Vector3 headPosition = transform.InverseTransformPoint(playerCamera.transform.position);
+            Vector3 center = new Vector3(headPosition.x, _initialControllerCenter.y, headPosition.z);
+            if (_characterController.center != center)
+            {
+                _characterController.center = center;
+            }
+        }
+
+        /// <summary>현재 머리 위치를 유지하면서 플레이어와 충돌체의 방향을 회전한다.</summary>
+        private void RotateVrPlayer(float angle)
+        {
+            if (playerCamera == null || Mathf.Approximately(angle, 0f))
+            {
+                return;
+            }
+
+            transform.RotateAround(playerCamera.transform.position, Vector3.up, angle);
+            Physics.SyncTransforms();
+        }
+
+        /// <summary>VR 컨트롤러의 왼쪽 스틱 이동과 머리 중심의 오른쪽 스틱 회전을 적용한다.</summary>
         private void UpdateVrLocomotion()
         {
             InputDevice leftController = InputDevices.GetDeviceAtXRNode(XRNode.LeftHand);
@@ -97,7 +132,7 @@ namespace XRLumina.Sample
             rightController.TryGetFeatureValue(CommonUsages.primary2DAxis, out turnInput);
 
             MovePlayer(moveInput, moveSpeed);
-            transform.Rotate(0f, turnInput.x * vrTurnSpeed * Time.deltaTime, 0f);
+            RotateVrPlayer(turnInput.x * vrTurnSpeed * Time.deltaTime);
         }
 
         /// <summary>방향키·WASD 이동과 우클릭 마우스 시점 회전을 적용한다.</summary>

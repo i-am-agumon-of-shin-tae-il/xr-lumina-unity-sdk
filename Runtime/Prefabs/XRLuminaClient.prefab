@@ -50,6 +50,8 @@ MonoBehaviour:
   host: 
   port: 9999
   discoveryPort: 9998
+  head: {fileID: 0}
+  body: {fileID: 0}
   discoveryTimeoutMs: 800
   retryDelayMs: 1500
 --- !u!114 &11400001
@@ -65,7 +67,6 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::XRLumina.MirroringController
   streamEnabled: 1
-  sourceCamera: {fileID: 0}
   width: 640
   height: 480
   framesPerSecond: 20
@@ -82,8 +83,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c2ee65a39ca24708a9ea45d0890795ac, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::XRLumina.InteractionController
-  head: {fileID: 0}
-  body: {fileID: 0}
   framesPerSecond: 5
   joystickDeadzone: 0.5
 --- !u!114 &11400003
@@ -98,7 +97,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d63ba6c3dbcc49da9c25788653890a43, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::XRLumina.EyeTrackingController
-  sourceCamera: {fileID: 0}
   gazeLayerMask:
     serializedVersion: 2
     m_Bits: 4294967295

@@ -12,7 +12,9 @@ namespace XRLumina._Core.Service
     {
         private readonly DeviceMessageSender _sender;
         private readonly XRLuminaClientService _client;
-        private readonly Camera _sourceCamera;
+        private readonly System.Func<Camera> _resolveCamera;
+        private readonly Func<Transform> _resolveMovementSource;
+        private Transform _movementSource;
         private readonly LayerMask _gazeLayerMask;
         private readonly float _maxDistance;
         private readonly int _framesPerSecond;
@@ -37,7 +39,8 @@ namespace XRLumina._Core.Service
         /// <summary>Unity 실행 호스트, SDK 의존성, 시선 기록 설정으로 서비스를 생성한다.</summary>
         internal EyeTrackingService(
             XRLuminaClientService client,
-            Camera sourceCamera,
+            System.Func<Camera> resolveCamera,
+            Func<Transform> resolveMovementSource,
             LayerMask gazeLayerMask,
             float maxDistance,
             int framesPerSecond,
@@ -50,7 +53,8 @@ namespace XRLumina._Core.Service
         {
             _client = client;
             _sender = client.MessageSender;
-            _sourceCamera = sourceCamera;
+            _resolveCamera = resolveCamera;
+            _resolveMovementSource = resolveMovementSource;
             _gazeLayerMask = gazeLayerMask;
             _maxDistance = maxDistance;
             _framesPerSecond = framesPerSecond;
@@ -79,14 +83,14 @@ namespace XRLumina._Core.Service
             _stationaryPanorama = null;
         }
 
-        /// <summary>설정된 FPS로 시선을 계속 기록하면서 카메라 공간 위치의 정지 구간을 판정한다.</summary>
+        /// <summary>설정된 FPS로 시선을 계속 기록하면서 플레이어 위치의 정지 구간을 판정한다.</summary>
         internal IEnumerator RecordingLoop()
         {
             var delay = new WaitForSeconds(1f / Mathf.Max(1, _framesPerSecond));
             while (true)
             {
                 var camera = ResolveCamera();
-                if (camera != null)
+                if (_client.IsMeasuring && camera != null)
                 {
                     ProcessSample(camera, Time.realtimeSinceStartup);
                 }
@@ -94,23 +98,40 @@ namespace XRLumina._Core.Service
             }
         }
 
-        /// <summary>현재 시선을 계산해 움직임을 판정한 뒤 카메라 자세와 함께 연속 기록한다.</summary>
+        /// <summary>플레이어 위치로 구간을 판정하고 HMD 위치·회전으로 시선과 카메라 자세를 기록한다.</summary>
         private void ProcessSample(Camera camera, float capturedAt)
         {
+            var movementSource = _resolveMovementSource?.Invoke();
+            if (movementSource == null)
+            {
+                return;
+            }
+            if (_movementSource != movementSource)
+            {
+                if (_isStationaryConfirmed)
+                {
+                    SendConfirmedSegment();
+                }
+                _recentGaze.Clear();
+                _movementSource = movementSource;
+                BeginStationaryCandidate(movementSource.position, capturedAt);
+            }
+
+            var playerPosition = movementSource.position;
             var cameraTransform = camera.transform;
             var gaze = CreateGazeFrame(_frameIndex++, Time.time, cameraTransform);
             if (!_hasStationaryCandidate)
             {
-                BeginStationaryCandidate(cameraTransform.position, capturedAt);
+                BeginStationaryCandidate(playerPosition, capturedAt);
             }
-            else if (Vector3.Distance(cameraTransform.position, _positionAnchor) >
+            else if (Vector3.Distance(playerPosition, _positionAnchor) >
                      _movementThresholdMeters)
             {
                 if (_isStationaryConfirmed)
                 {
                     SendConfirmedSegment();
                 }
-                BeginStationaryCandidate(cameraTransform.position, capturedAt);
+                BeginStationaryCandidate(playerPosition, capturedAt);
             }
 
             _recentGaze.Add(new TimedGazeFrame(
@@ -130,7 +151,7 @@ namespace XRLumina._Core.Service
             }
         }
 
-        /// <summary>이동이 끝난 현재 카메라 위치와 시각을 다음 정지 후보의 기준으로 저장한다.</summary>
+        /// <summary>이동 판정용 플레이어 위치와 시각을 다음 정지 후보의 기준으로 저장한다.</summary>
         private void BeginStationaryCandidate(Vector3 position, float capturedAt)
         {
             _hasStationaryCandidate = true;
@@ -358,10 +379,10 @@ namespace XRLumina._Core.Service
             return new XRLuminaGazeFrame(frame, time, new[] { hitPosition });
         }
 
-        /// <summary>지정 카메라 또는 현재 메인 카메라를 시선 기록 대상으로 반환한다.</summary>
+        /// <summary>클라이언트에 연결된 HMD 카메라를 시선 기록 대상으로 반환한다.</summary>
         private Camera ResolveCamera()
         {
-            return _sourceCamera != null ? _sourceCamera : Camera.main;
+            return _resolveCamera?.Invoke();
         }
 
         /// <summary>새 세션 기록을 위해 런타임 상태와 버퍼를 초기화한다.</summary>
@@ -369,6 +390,7 @@ namespace XRLumina._Core.Service
         {
             _recentGaze.Clear();
             _requestGaze.Clear();
+            _movementSource = null;
             _frameIndex = 0;
             _segmentIndex = 0;
             _hasStationaryCandidate = false;

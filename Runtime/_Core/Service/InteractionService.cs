@@ -14,11 +14,10 @@ namespace XRLumina._Core.Service
     {
         private readonly DeviceMessageSender _sender;
         private readonly XRLuminaClientService _client;
-        private Transform _head;
-        private Transform _body;
+        private readonly Func<Transform> _resolveHead;
+        private readonly Func<Transform> _resolveBody;
         private readonly int _framesPerSecond;
         private readonly float _joystickDeadzone;
-        private bool _isTracking;
         private bool _wasControllerPressed;
         private bool _wasLeftJoystickPushed;
         private bool _wasRightJoystickPushed;
@@ -26,15 +25,15 @@ namespace XRLumina._Core.Service
         /// <summary>Unity 실행 호스트, SDK 의존성, 인터랙션 설정으로 서비스를 생성한다.</summary>
         internal InteractionService(
             XRLuminaClientService client,
-            Transform head,
-            Transform body,
+            Func<Transform> resolveHead,
+            Func<Transform> resolveBody,
             int framesPerSecond,
             float joystickDeadzone)
         {
             _client = client;
             _sender = client.MessageSender;
-            _head = head;
-            _body = body;
+            _resolveHead = resolveHead;
+            _resolveBody = resolveBody;
             _framesPerSecond = framesPerSecond;
             _joystickDeadzone = joystickDeadzone;
         }
@@ -47,18 +46,6 @@ namespace XRLumina._Core.Service
             return CreateTrackingLoop(_framesPerSecond);
         }
 
-        /// <summary>히트맵과 상호작용 위치에 사용할 머리 Transform을 교체한다.</summary>
-        internal void SetHead(Transform target)
-        {
-            _head = target;
-        }
-
-        /// <summary>이동·회전 분석에 사용할 몸 Transform을 교체한다.</summary>
-        internal void SetBody(Transform target)
-        {
-            _body = target;
-        }
-
         /// <summary>추적을 종료하고 NavMesh와 누적 데이터를 Electron으로 플러시한다.</summary>
         internal void FinishFeature()
         {
@@ -69,7 +56,7 @@ namespace XRLumina._Core.Service
         /// <summary>측정 중 XR 컨트롤러 버튼과 조이스틱 입력의 시작 시점을 기록한다.</summary>
         internal void Tick()
         {
-            if (!_isTracking)
+            if (!_client.IsMeasuring)
             {
                 return;
             }
@@ -90,13 +77,17 @@ namespace XRLumina._Core.Service
         /// <summary>현재 머리 위치를 기준으로 지정 종류의 상호작용 이벤트를 기록한다.</summary>
         internal void RecordEvent(XRLuminaInteractionEventType type)
         {
-            var source = _head != null ? _head : Camera.main?.transform;
+            var source = _resolveHead?.Invoke();
+            if (source == null)
+            {
+                return;
+            }
             SendEvent(
                 GetEventTypeName(type),
                 "ReportCount",
                 0,
                 DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"),
-                source != null ? source.position : Vector3.zero);
+                source.position);
         }
 
         /// <summary>조이스틱이 데드존 밖으로 처음 이동한 순간을 제스처 이벤트로 기록한다.</summary>
@@ -161,14 +152,7 @@ namespace XRLumina._Core.Service
         /// <summary>지정 머리·몸 Transform을 설정된 간격으로 전송하기 시작한다.</summary>
         private IEnumerator CreateTrackingLoop(int framesPerSecond)
         {
-            _isTracking = true;
             return TrackingLoop(Mathf.Max(1, framesPerSecond));
-        }
-
-        /// <summary>실행 중인 포즈 추적 코루틴을 중지한다.</summary>
-        internal void StopTracking()
-        {
-            _isTracking = false;
         }
 
         /// <summary>현재 씬의 NavMesh 삼각형 데이터를 계산해 전송한다.</summary>
@@ -184,13 +168,13 @@ namespace XRLumina._Core.Service
             var delay = new WaitForSeconds(1f / framesPerSecond);
             while (true)
             {
-                var fallback = Camera.main != null ? Camera.main.transform : null;
-                var currentHead = _head != null ? _head : fallback;
-                var currentBody = _body != null ? _body : fallback;
-                SendTracking(
-                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"),
-                    currentHead,
-                    currentBody);
+                if (_client.IsMeasuring)
+                {
+                    SendTracking(
+                        DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"),
+                        _resolveHead?.Invoke(),
+                        _resolveBody?.Invoke());
+                }
                 yield return delay;
             }
         }

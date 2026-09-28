@@ -11,5 +11,6 @@ namespace XRLumina._Core.Infrastructure
         EyeTrackingGaze = 6,
         EyeTrackingCapture = 7,
         EyeTrackingCameraPose = 8,
+        HeuristicScreenshot = 9,
     }
 }
