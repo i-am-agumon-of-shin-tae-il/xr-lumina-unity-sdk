@@ -20,7 +20,6 @@ namespace XRLumina._Core.Infrastructure
         private readonly int _timeoutMs;
         private readonly string _requestMessage;
         private readonly Func<string, DiscoveryAdvertisement> _parseResponse;
-        private string _acceptedInstanceId;
 
         /// <summary>고정 주소와 UDP 탐색 설정 및 응답 해석기를 구성한다.</summary>
         public NetworkEndpointDiscovery(
@@ -40,12 +39,12 @@ namespace XRLumina._Core.Infrastructure
             _parseResponse = parseResponse ?? throw new ArgumentNullException(nameof(parseResponse));
         }
 
-        /// <summary>현재 설정에 따라 TCP 연결 대상을 반환한다.</summary>
-        public NetworkEndpoint Resolve()
+        /// <summary>탐색 시간 동안 응답한 모든 데스크톱의 TCP 연결 대상을 반환한다.</summary>
+        public IReadOnlyCollection<NetworkEndpoint> ResolveAll()
         {
             if (!string.IsNullOrWhiteSpace(_fixedHost))
             {
-                return new NetworkEndpoint(_fixedHost, _port);
+                return new[] { new NetworkEndpoint(_fixedHost, _port), };
             }
 
             using (var udp = new UdpClient())
@@ -72,45 +71,37 @@ namespace XRLumina._Core.Infrastructure
                     throw sendError ?? new SocketException((int)SocketError.NetworkUnreachable);
                 }
 
+                var endpoints = new Dictionary<string, NetworkEndpoint>();
                 var expiresAt = DateTime.UtcNow.AddMilliseconds(_timeoutMs);
                 while (true)
                 {
                     var remainingMs = (int)(expiresAt - DateTime.UtcNow).TotalMilliseconds;
                     if (remainingMs <= 0)
                     {
-                        throw new SocketException((int)SocketError.TimedOut);
+                        break;
                     }
 
                     udp.Client.ReceiveTimeout = remainingMs;
                     var remote = new IPEndPoint(IPAddress.Any, 0);
-                    var response = Encoding.UTF8.GetString(udp.Receive(ref remote));
-                    var result = _parseResponse(response);
-                    if (!AcceptInstance(result.InstanceId))
+                    try
                     {
-                        continue;
+                        var response = Encoding.UTF8.GetString(udp.Receive(ref remote));
+                        var result = _parseResponse(response);
+                        var port = result.Port > 0 ? result.Port : _port;
+                        var key = string.IsNullOrWhiteSpace(result.InstanceId)
+                            ? $"{remote.Address}:{port}"
+                            : result.InstanceId;
+                        endpoints[key] = new NetworkEndpoint(remote.Address.ToString(), port, key);
                     }
-
-                    return new NetworkEndpoint(
-                        remote.Address.ToString(),
-                        result.Port > 0 ? result.Port : _port
-                    );
+                    catch (SocketException exception) when (exception.SocketErrorCode == SocketError.TimedOut)
+                    {
+                        break;
+                    }
+                    catch (System.IO.InvalidDataException) { }
+                    catch (Newtonsoft.Json.JsonException) { }
                 }
+                return new List<NetworkEndpoint>(endpoints.Values);
             }
-        }
-
-        /// <summary>최초 연결한 서버 인스턴스만 재연결 대상으로 허용한다.</summary>
-        private bool AcceptInstance(string instanceId)
-        {
-            if (string.IsNullOrWhiteSpace(instanceId))
-            {
-                return string.IsNullOrWhiteSpace(_acceptedInstanceId);
-            }
-            if (string.IsNullOrWhiteSpace(_acceptedInstanceId))
-            {
-                _acceptedInstanceId = instanceId;
-                return true;
-            }
-            return _acceptedInstanceId == instanceId;
         }
 
         /// <summary>제한 브로드캐스트와 활성 IPv4 인터페이스의 directed broadcast 주소를 반환한다.</summary>

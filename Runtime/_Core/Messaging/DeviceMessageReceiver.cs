@@ -35,6 +35,14 @@ namespace XRLumina._Core.Messaging
             _commandReceived = commandReceived;
         }
 
+        /// <summary>선택 해제 시 이전 세션과 응답 기록을 비운다.</summary>
+        internal void Reset()
+        {
+            _lastSessionUuid = null;
+            _flushResponses.Clear();
+            _sessionState.Clear();
+        }
+
         /// <summary>세션을 채택하고 연결 복구 또는 새 테스트 시작을 처리한다.</summary>
         internal void ReceiveSession(DeviceMessage message)
         {
