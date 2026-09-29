@@ -289,7 +289,7 @@ namespace XRLumina.Sample
             }
         }
 
-        /// <summary>화면 중앙의 샘플 타깃을 찾아 해당 SDK 인터랙션 이벤트를 기록한다.</summary>
+        /// <summary>화면 중앙의 대상에 연결된 액션이나 샘플 인터랙션을 호출한다.</summary>
         private void TryInteractWithTarget()
         {
             if (playerCamera == null)
@@ -303,6 +303,7 @@ namespace XRLumina.Sample
                 return;
             }
 
+            hit.collider.GetComponent<XRLuminaSampleContactAction>()?.Invoke();
             XRLuminaSampleInteractionTarget target = hit.collider.GetComponent<XRLuminaSampleInteractionTarget>();
             target?.Interact();
         }
