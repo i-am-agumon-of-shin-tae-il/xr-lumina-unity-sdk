@@ -9,13 +9,13 @@ namespace XRLumina._Core.Messaging
     /// <summary>요청, 스트림, 생명주기, 플러시 등 장비 프로토콜의 송신 메시지를 생성한다.</summary>
     internal sealed class DeviceMessageSender
     {
-        private readonly TcpTransport _transport;
+        private readonly System.Func<TcpTransport> _resolveTransport;
         private int _requestId;
 
         /// <summary>TCP 전송 계층을 사용하는 메시지 센더를 생성한다.</summary>
-        internal DeviceMessageSender(TcpTransport transport)
+        internal DeviceMessageSender(System.Func<TcpTransport> resolveTransport)
         {
-            _transport = transport;
+            _resolveTransport = resolveTransport;
         }
 
         /// <summary>JSON 문자열을 JSON 타입 패킷으로 전송한다.</summary>
@@ -25,7 +25,7 @@ namespace XRLumina._Core.Messaging
             {
                 return false;
             }
-            if (_transport.Send(PacketType.Json, Encoding.UTF8.GetBytes(json)))
+            if (_resolveTransport()?.Send(PacketType.Json, Encoding.UTF8.GetBytes(json)) == true)
             {
                 Debug.Log($"[DeviceTcp] ▷ SEND: {json}");
                 return true;
@@ -37,7 +37,7 @@ namespace XRLumina._Core.Messaging
         /// <summary>미러링 프레임을 바이너리 패킷으로 전송한다.</summary>
         public bool SendMirrorFrame(byte[] payload)
         {
-            return payload != null && _transport.Send(PacketType.MirrorFrame, payload);
+            return payload != null && _resolveTransport()?.Send(PacketType.MirrorFrame, payload) == true;
         }
 
         /// <summary>측정 바이너리 패킷을 전송하고 미연결이면 재전송 큐에 추가한다.</summary>
@@ -47,9 +47,10 @@ namespace XRLumina._Core.Messaging
             {
                 return;
             }
-            if (!_transport.Send(type, payload))
+            var transport = _resolveTransport();
+            if (transport != null && !transport.Send(type, payload))
             {
-                _transport.Enqueue(type, payload);
+                transport.Enqueue(type, payload);
             }
         }
 

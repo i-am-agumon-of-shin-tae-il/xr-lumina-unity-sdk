@@ -13,11 +13,19 @@ namespace XRLumina._Core.Session
         public XRLuminaSession Session => _session;
         public bool IsAuthenticated => _session != null && !string.IsNullOrEmpty(_session.uuid);
 
+        /// <summary>선택된 데스크톱에서 전달한 세션을 저장한다.</summary>
         internal void AdoptSession(string uuid, int seq)
         {
             _session = new XRLuminaSession { uuid = uuid, seq = seq, };
         }
 
+        /// <summary>선택 해제 시 이전 세션 인증을 제거한다.</summary>
+        internal void Clear()
+        {
+            _session = null;
+        }
+
+        /// <summary>새 세션 준비 이벤트를 발행한다.</summary>
         internal void ReceiveSessionReady()
         {
             SessionReady?.Invoke();

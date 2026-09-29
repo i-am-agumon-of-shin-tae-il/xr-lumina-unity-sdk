@@ -104,6 +104,17 @@ namespace XRLumina._Core.Infrastructure
             }
         }
 
+        /// <summary>선택 해제 시 이전 측정의 미전송 패킷을 제거한다.</summary>
+        internal void ClearPending()
+        {
+            while (_pendingPackets.TryDequeue(out _))
+            {
+                Interlocked.Decrement(ref _pendingPacketCount);
+            }
+            while (_sendQueue.TryDequeue(out _)) { }
+            Interlocked.Exchange(ref _latestMirrorFrame, null);
+        }
+
         /// <summary>수신 루프를 중단하고 현재 연결을 닫는다.</summary>
         public void Dispose()
         {
