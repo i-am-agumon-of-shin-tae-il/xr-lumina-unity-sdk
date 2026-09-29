@@ -57,7 +57,10 @@ namespace XRLumina.Sample
         /// <summary>설정된 종류의 SDK 인터랙션 이벤트를 기록하고 타깃을 점멸시킨다.</summary>
         public void Interact()
         {
-            InteractionController.Instance?.RecordInteractionEvent(interactionType);
+            InteractionController.Instance?.RecordInteractionEvent(
+                interactionType,
+                gameObject,
+                "Interact");
             if (_feedbackCoroutine != null)
             {
                 StopCoroutine(_feedbackCoroutine);
