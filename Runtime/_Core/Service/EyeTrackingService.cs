@@ -88,10 +88,6 @@ namespace XRLumina._Core.Service
         /// <summary>연속 기록을 종료하고 이미 생성된 구간들의 업로드를 요청한다.</summary>
         internal void FinishFeature()
         {
-            if (_isStationaryConfirmed)
-            {
-                SendConfirmedSegment();
-            }
             _recentGaze.Clear();
             _requestGaze.Clear();
             _hasStationaryCandidate = false;
@@ -102,7 +98,7 @@ namespace XRLumina._Core.Service
         /// <summary>설정된 FPS로 시선을 계속 기록하면서 플레이어 위치의 정지 구간을 판정한다.</summary>
         internal IEnumerator RecordingLoop()
         {
-            var delay = new WaitForSecondsRealtime(1f / Mathf.Max(1, _framesPerSecond));
+            var delay = new WaitForSeconds(1f / Mathf.Max(1, _framesPerSecond));
             while (true)
             {
                 SendReadySegments();
@@ -136,7 +132,7 @@ namespace XRLumina._Core.Service
 
             var playerPosition = movementSource.position;
             var cameraTransform = camera.transform;
-            var gaze = CreateGazeFrame(_frameIndex++, _client.MeasurementTime, cameraTransform);
+            var gaze = CreateGazeFrame(_frameIndex++, Time.time, cameraTransform);
             if (!_hasStationaryCandidate)
             {
                 BeginStationaryCandidate(playerPosition, capturedAt);
@@ -161,10 +157,6 @@ namespace XRLumina._Core.Service
             if (_isStationaryConfirmed)
             {
                 _requestGaze.Add(gaze);
-                if (_requestGaze.Count >= Mathf.Max(1, _framesPerSecond) * 60)
-                {
-                    SendConfirmedSegment();
-                }
             }
             else if (capturedAt - _stationaryStartedAt >= GetStationaryDurationSeconds())
             {
@@ -444,7 +436,7 @@ namespace XRLumina._Core.Service
                 SendReadySegments();
                 if (Time.realtimeSinceStartup >= deadline)
                 {
-                    _client.ReportMeasurementError("panorama encoding timeout");
+                    Debug.LogError("[EyeTracking] 파노라마 인코딩 대기 시간 초과");
                     onResult?.Invoke(false, "panorama encoding timeout");
                     yield break;
                 }
@@ -452,7 +444,6 @@ namespace XRLumina._Core.Service
             }
             if (_captureError != null)
             {
-                _client.ReportMeasurementError(_captureError);
                 onResult?.Invoke(false, _captureError);
                 yield break;
             }
@@ -525,7 +516,8 @@ namespace XRLumina._Core.Service
                     writer.Write(totalChunks);
                     writer.Write(bytes.Length);
                     writer.Write(bytes, offset, count);
-                });
+                }, count + System.Text.Encoding.UTF8.GetByteCount(fileName) +
+                   System.Text.Encoding.UTF8.GetByteCount(uploadId) + 20);
             }
         }
 
@@ -545,9 +537,9 @@ namespace XRLumina._Core.Service
         }
 
         /// <summary>작성된 바이너리 페이로드를 지정 패킷 종류로 전송한다.</summary>
-        private void Send(PacketType type, Action<System.IO.BinaryWriter> write)
+        private void Send(PacketType type, Action<System.IO.BinaryWriter> write, int capacity = 256)
         {
-            _sender?.SendStream(type, BinaryPayload.Create(write));
+            _sender?.SendStream(type, BinaryPayload.Create(write, capacity));
         }
 
     }

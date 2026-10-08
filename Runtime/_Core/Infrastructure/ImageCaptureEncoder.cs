@@ -25,9 +25,12 @@ namespace XRLumina._Core.Infrastructure
                         {
                             if (request.hasError)
                             {
-                                throw new InvalidOperationException("GPU capture readback failed.");
+                                ReadPixelsAndEncode(target, width, height, shiftPixels, completion);
                             }
-                            Encode(request.GetData<byte>().ToArray(), width, height, shiftPixels, completion);
+                            else
+                            {
+                                Encode(request.GetData<byte>().ToArray(), width, height, shiftPixels, completion);
+                            }
                         }
                         catch (Exception exception)
                         {
@@ -47,6 +50,25 @@ namespace XRLumina._Core.Infrastructure
                 return completion.Task;
             }
 
+            try
+            {
+                ReadPixelsAndEncode(target, width, height, shiftPixels, completion);
+            }
+            catch (Exception exception)
+            {
+                completion.TrySetException(exception);
+            }
+            finally
+            {
+                release();
+            }
+            return completion.Task;
+        }
+
+        /// <summary>비동기 GPU 읽기를 사용할 수 없으면 기존 픽셀 읽기로 대체하고 인코딩은 작업 스레드에 맡긴다.</summary>
+        private static void ReadPixelsAndEncode(RenderTexture target, int width, int height, int shiftPixels,
+            TaskCompletionSource<byte[]> completion)
+        {
             var previousActive = RenderTexture.active;
             Texture2D texture = null;
             try
@@ -56,10 +78,6 @@ namespace XRLumina._Core.Infrastructure
                 texture.ReadPixels(new Rect(0f, 0f, width, height), 0, 0, false);
                 Encode(texture.GetRawTextureData<byte>().ToArray(), width, height, shiftPixels, completion);
             }
-            catch (Exception exception)
-            {
-                completion.TrySetException(exception);
-            }
             finally
             {
                 RenderTexture.active = previousActive;
@@ -67,9 +85,7 @@ namespace XRLumina._Core.Infrastructure
                 {
                     UnityEngine.Object.Destroy(texture);
                 }
-                release();
             }
-            return completion.Task;
         }
 
         /// <summary>RGB 행 보정과 스레드 안전 PNG 인코딩을 Unity 프레임 밖에서 처리한다.</summary>
@@ -80,6 +96,10 @@ namespace XRLumina._Core.Infrastructure
             {
                 try
                 {
+                    if (width <= 0 || height <= 0 || (long)width * height * 3 != pixels.Length)
+                    {
+                        throw new ArgumentException("캡처 크기와 RGB 픽셀 배열 길이가 일치해야 합니다.");
+                    }
                     var shift = ((shiftPixels % width) + width) % width;
                     if (shift != 0)
                     {

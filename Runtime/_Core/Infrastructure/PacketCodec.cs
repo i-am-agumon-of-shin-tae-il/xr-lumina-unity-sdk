@@ -10,7 +10,6 @@ namespace XRLumina._Core.Infrastructure
         private const int HeaderLength = 5;
         private const int MaxPayloadLength = 64 * 1024 * 1024;
 
-        /// <summary>헤더와 페이로드를 정확한 길이만큼 읽어 하나의 패킷으로 복원한다.</summary>
         public static bool TryRead(Stream stream, out NetworkPacket packet)
         {
             packet = default;
@@ -40,7 +39,6 @@ namespace XRLumina._Core.Infrastructure
             return true;
         }
 
-        /// <summary>패킷 크기를 검증한 후 헤더와 페이로드를 스트림에 기록한다.</summary>
         public static void Write(Stream stream, PacketType type, byte[] payload)
         {
             if (payload == null)
@@ -48,10 +46,6 @@ namespace XRLumina._Core.Infrastructure
                 throw new ArgumentNullException(nameof(payload));
             }
 
-            if (payload.Length > MaxPayloadLength)
-            {
-                throw new InvalidDataException($"packet payload too large: {payload.Length}");
-            }
             var header = new byte[HeaderLength];
             header[0] = (byte)type;
             header[1] = (byte)((payload.Length >> 24) & 0xff);
@@ -65,7 +59,6 @@ namespace XRLumina._Core.Infrastructure
             }
         }
 
-        /// <summary>TCP 조각 경계를 넘어 요청한 바이트 수를 끝까지 읽는다.</summary>
         private static bool ReadExact(Stream stream, byte[] buffer, int count)
         {
             var offset = 0;

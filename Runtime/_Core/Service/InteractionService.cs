@@ -86,7 +86,7 @@ namespace XRLumina._Core.Service
                 GetEventTypeName(type),
                 "ReportCount",
                 0,
-                _client.GetMeasurementTimestamp(),
+                DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"),
                 source.position);
         }
 
@@ -165,13 +165,13 @@ namespace XRLumina._Core.Service
         /// <summary>지정된 간격마다 머리와 몸의 위치·회전을 전송한다.</summary>
         private IEnumerator TrackingLoop(int framesPerSecond)
         {
-            var delay = new WaitForSecondsRealtime(1f / framesPerSecond);
+            var delay = new WaitForSeconds(1f / framesPerSecond);
             while (true)
             {
                 if (_client.IsMeasuring)
                 {
                     SendTracking(
-                        _client.GetMeasurementTimestamp(),
+                        DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"),
                         _resolveHead?.Invoke(),
                         _resolveBody?.Invoke());
                 }
@@ -262,13 +262,13 @@ namespace XRLumina._Core.Service
                 {
                     writer.Write(index);
                 }
-            });
+            }, checked(8 + vertices.Count * 12 + indices.Count * 4));
         }
 
         /// <summary>작성된 바이너리 페이로드를 지정 패킷 종류로 전송한다.</summary>
-        private void Send(PacketType type, System.Action<System.IO.BinaryWriter> write)
+        private void Send(PacketType type, System.Action<System.IO.BinaryWriter> write, int capacity = 256)
         {
-            _sender?.SendStream(type, BinaryPayload.Create(write));
+            _sender?.SendStream(type, BinaryPayload.Create(write, capacity));
         }
 
         /// <summary>Transform의 위치와 오일러 회전을 바이너리 스트림에 기록한다.</summary>

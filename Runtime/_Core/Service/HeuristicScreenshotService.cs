@@ -208,7 +208,6 @@ namespace XRLumina._Core.Service
 
             if (_captureError != null)
             {
-                _client.ReportMeasurementError(_captureError);
                 onResult?.Invoke(false, _captureError);
                 yield break;
             }
@@ -403,7 +402,11 @@ namespace XRLumina._Core.Service
                     writer.Write(totalChunks);
                     writer.Write(bytes.Length);
                     writer.Write(bytes, offset, count);
-                }));
+                }, count + System.Text.Encoding.UTF8.GetByteCount(fileName) +
+                   System.Text.Encoding.UTF8.GetByteCount(uploadId) +
+                   System.Text.Encoding.UTF8.GetByteCount(trigger.Type ?? string.Empty) +
+                   System.Text.Encoding.UTF8.GetByteCount(trigger.ObjectName ?? string.Empty) +
+                   System.Text.Encoding.UTF8.GetByteCount(trigger.ControllerInput ?? string.Empty) + 36));
             }
         }
 

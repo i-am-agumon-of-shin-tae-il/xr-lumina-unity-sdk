@@ -49,7 +49,6 @@ namespace XRLumina.Features
                 captureChunkSize);
             _client.MeasurementStarted += StartFeature;
             _client.MeasurementFinished += FinishFeature;
-            _client.FlushRequested += RetryFlush;
         }
 
         /// <summary>아이트래킹 이동 판정에 사용할 플레이어 Transform을 반환한다.</summary>
@@ -84,24 +83,9 @@ namespace XRLumina.Features
         {
             StopRecording();
             _service?.FinishFeature();
-            RetryFlush();
-        }
-
-        /// <summary>완료된 구간을 재생성하지 않고 아이트래킹 종료 요청만 재전송한다.</summary>
-        private void RetryFlush()
-        {
             if (_service != null)
             {
-                StartCoroutine(_service.Flush(180f, LogFlushResult));
-            }
-        }
-
-        /// <summary>캡처·업로드 응답 실패를 Unity 로그에 전달한다.</summary>
-        private void LogFlushResult(bool ok, string error)
-        {
-            if (!ok)
-            {
-                Debug.LogError($"[XRLumina] 아이트래킹 종료 실패: {error}", this);
+                StartCoroutine(_service.Flush(60f, null));
             }
         }
 
@@ -112,7 +96,6 @@ namespace XRLumina.Features
             {
                 _client.MeasurementStarted -= StartFeature;
                 _client.MeasurementFinished -= FinishFeature;
-                _client.FlushRequested -= RetryFlush;
             }
             StopRecording();
         }

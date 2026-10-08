@@ -75,12 +75,12 @@ namespace XRLumina._Core.Service
         {
             var endOfFrame = new WaitForEndOfFrame();
             var interval = 1f / Mathf.Max(1, _framesPerSecond);
-            var nextCaptureAt = Time.realtimeSinceStartup;
+            var nextCaptureAt = Time.time;
             while (true)
             {
                 yield return endOfFrame;
                 CompleteEncoding();
-                var now = Time.realtimeSinceStartup;
+                var now = Time.time;
                 if (now >= nextCaptureAt)
                 {
                     CaptureFrame();

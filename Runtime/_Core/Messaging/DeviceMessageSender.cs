@@ -19,15 +19,13 @@ namespace XRLumina._Core.Messaging
         }
 
         /// <summary>JSON 문자열을 JSON 타입 패킷으로 전송한다.</summary>
-        public bool SendJson(string json, bool ordered = false)
+        public bool SendJson(string json)
         {
             if (string.IsNullOrEmpty(json))
             {
                 return false;
             }
-            var transport = _resolveTransport();
-            var payload = Encoding.UTF8.GetBytes(json);
-            if (transport != null && (ordered ? transport.Send(PacketType.Json, payload) : transport.SendControl(PacketType.Json, payload)))
+            if (_resolveTransport()?.Send(PacketType.Json, Encoding.UTF8.GetBytes(json)) == true)
             {
                 Debug.Log($"[DeviceTcp] ▷ SEND: {json}");
                 return true;
@@ -78,13 +76,7 @@ namespace XRLumina._Core.Messaging
                 projectMemberSeq,
                 frameInterval = frameIntervalSeconds,
             });
-            var queueError = _resolveTransport()?.QueueError;
-            if (queueError != null)
-            {
-                SendJson(JsonConvert.SerializeObject(new { type = "measurement:error", error = queueError, }));
-                return null;
-            }
-            if (!SendJson(payload, true))
+            if (!SendJson(payload))
             {
                 return null;
             }
