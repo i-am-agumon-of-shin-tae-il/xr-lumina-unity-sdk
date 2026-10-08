@@ -28,8 +28,6 @@ namespace XRLumina._Core.Service
         private readonly DeviceMessageReceiver _receiver;
         private readonly DeviceMessageDispatcher _dispatcher;
         private readonly XRLuminaSessionState _sessionState = new();
-        private float _measurementStartedAt;
-        private DateTime _measurementWallClock;
         private string _helloJson;
         private string _unavailableHelloJson;
 
@@ -38,7 +36,6 @@ namespace XRLumina._Core.Service
         internal event Action Disconnected;
         internal event Action MeasurementStarted;
         internal event Action MeasurementFinished;
-        internal event Action FlushRequested;
 
         internal event Action SessionReady
         {
@@ -49,13 +46,6 @@ namespace XRLumina._Core.Service
         internal XRLuminaSession Session => _sessionState.Session;
         internal bool IsAuthenticated => _sessionState.IsAuthenticated;
         internal bool IsMeasuring { get; private set; }
-        internal float MeasurementTime => Mathf.Max(0f, Time.realtimeSinceStartup - _measurementStartedAt);
-
-        /// <summary>측정 시작의 벽시계에 단조 증가 경과 시간을 더해 기존 timestamp 규격을 유지한다.</summary>
-        internal string GetMeasurementTimestamp()
-        {
-            return _measurementWallClock.AddSeconds(MeasurementTime).ToString("yyyy-MM-dd HH:mm:ss.fff");
-        }
         internal DeviceMessageSender MessageSender => _messageSender;
 
         /// <summary>연결 설정과 기능 실행 함수를 받아 SDK 런타임 서비스를 구성한다.</summary>
@@ -95,8 +85,6 @@ namespace XRLumina._Core.Service
                 name = SystemInfo.deviceName,
                 id = SystemInfo.deviceUniqueIdentifier,
                 available = true,
-                runtimeId = Guid.NewGuid().ToString("N"),
-                heartbeat = true,
             });
             _unavailableHelloJson = _helloJson.Replace("\"available\":true", "\"available\":false");
             if (_running)
@@ -133,12 +121,6 @@ namespace XRLumina._Core.Service
         internal string RequestFlush(string group, int projectMemberSeq, float frameIntervalSeconds)
         {
             return _messageSender.SendFlushRequest(group, projectMemberSeq, frameIntervalSeconds);
-        }
-
-        /// <summary>캡처·송신 누락을 데스크톱에 알려 불완전한 측정을 성공 처리하지 않는다.</summary>
-        internal void ReportMeasurementError(string error)
-        {
-            _messageSender.SendJson(JsonConvert.SerializeObject(new { type = "measurement:error", error, }));
         }
 
         /// <summary>요청 식별자가 같은 플러시 응답을 제한 시간까지 기다린다.</summary>
@@ -201,7 +183,7 @@ namespace XRLumina._Core.Service
                 // 장비 식별은 Unity Update가 멈춰 있어도 연결 직후 전송한다.
                 var hello = _selectedTransport == null || _selectedTransport == transport
                     ? _helloJson : _unavailableHelloJson;
-                SendControlJson(transport, hello);
+                transport.Send(PacketType.Json, Encoding.UTF8.GetBytes(hello));
             };
             transport.Disconnected += () => _mainThreadActions.Enqueue(() =>
             {
@@ -209,10 +191,16 @@ namespace XRLumina._Core.Service
                 {
                     return;
                 }
+                _transports.Remove(endpoint.InstanceId);
+                transport.Dispose();
                 if (_selectedTransport == transport)
                 {
-                    // 일시적인 단절은 측정·세션·전송 큐를 초기화하지 않는다.
+                    _selectedTransport = null;
+                    IsMeasuring = false;
+                    _receiver.Reset();
+                    transport.ClearPending();
                     Disconnected?.Invoke();
+                    BroadcastAvailability();
                 }
             });
             transport.PacketReceived += packet => HandlePacketReceived(transport, packet);
@@ -220,46 +208,29 @@ namespace XRLumina._Core.Service
             transport.Start();
         }
 
-        /// <summary>제어 JSON을 송신하고 백그라운드 송신 결과도 기존 형식으로 로그에 남긴다.</summary>
-        private void SendControlJson(TcpTransport transport, string json)
-        {
-            var sent = transport.SendControl(PacketType.Json, Encoding.UTF8.GetBytes(json));
-            _mainThreadActions.Enqueue(() =>
-            {
-                if (sent)
-                {
-                    Debug.Log($"[DeviceTcp] ▷ SEND: {json}");
-                }
-                else
-                {
-                    Debug.LogWarning($"[DeviceTcp] ▷ SEND 실패(미연결): {json}");
-                }
-            });
-        }
-
         /// <summary>선택한 데스크톱을 제외한 목록에서 장비를 숨기고 해제 시 다시 표시한다.</summary>
         private void BroadcastAvailability()
         {
             foreach (var transport in _transports.Values)
             {
-                SendControlJson(transport, JsonConvert.SerializeObject(new
+                transport.Send(PacketType.Json, Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new
                 {
                     type = "device:availability",
                     available = _selectedTransport == null || _selectedTransport == transport,
-                }));
+                })));
             }
         }
 
         /// <summary>요청한 연결로 선택 또는 해제 결과를 반환한다.</summary>
         private void ReplySelection(TcpTransport transport, DeviceMessage message, bool ok, string error = null)
         {
-            SendControlJson(transport, JsonConvert.SerializeObject(new
+            transport.Send(PacketType.Json, Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new
             {
                 type = message.type + ":ack",
                 selectionId = message.selectionId,
                 ok,
                 error,
-            }));
+            })));
         }
 
         /// <summary>선택 요청을 직렬 처리하고 소유한 데스크톱의 메시지만 수신기에 전달한다.</summary>
@@ -307,13 +278,6 @@ namespace XRLumina._Core.Service
             if (_selectedTransport == transport)
             {
                 _dispatcher.Dispatch(message);
-                if (message.type == "command" && !string.IsNullOrEmpty(message.id))
-                {
-                    SendControlJson(transport, JsonConvert.SerializeObject(new
-                    {
-                        type = "command:ack", id = message.id, action = message.action, ok = true,
-                    }));
-                }
                 if (message.type == "session")
                 {
                     transport.SendPending();
@@ -333,27 +297,13 @@ namespace XRLumina._Core.Service
         {
             if (action == "start")
             {
-                if (IsMeasuring)
-                {
-                    return;
-                }
-                _measurementStartedAt = Time.realtimeSinceStartup;
-                _measurementWallClock = DateTime.Now;
                 IsMeasuring = true;
                 MeasurementStarted?.Invoke();
             }
             else if (action == "finish")
             {
-                if (IsMeasuring)
-                {
-                    IsMeasuring = false;
-                    MeasurementFinished?.Invoke();
-                }
-                else
-                {
-                    FlushRequested?.Invoke();
-                    return;
-                }
+                IsMeasuring = false;
+                MeasurementFinished?.Invoke();
             }
             CommandReceived?.Invoke(action);
         }
@@ -393,12 +343,6 @@ namespace XRLumina._Core.Service
             try
             {
                 var message = JsonConvert.DeserializeObject<DeviceMessage>(json);
-                if (message?.type == "ping")
-                {
-                    _mainThreadActions.Enqueue(() => Debug.Log($"[DeviceTcp] ◀ RECV: {json}"));
-                    SendControlJson(transport, "{\"type\":\"pong\"}");
-                    return;
-                }
                 if (message != null)
                 {
                     _mainThreadActions.Enqueue(() =>
