@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using UnityEngine;
 using XRLumina._Core.Infrastructure;
 using XRLumina._Core.Messaging;
@@ -32,7 +33,17 @@ namespace XRLumina._Core.Service
         private bool _isStationaryConfirmed;
         private float _stationaryStartedAt;
         private Vector3 _positionAnchor;
-        private byte[] _stationaryPanorama;
+        private Task<byte[]> _stationaryPanorama;
+        private readonly Queue<PendingSegment> _pendingSegments = new();
+        private string _captureError;
+
+        private sealed class PendingSegment
+        {
+            internal Task<byte[]> Panorama;
+            internal XRLuminaGazeFrame[] Frames;
+            internal Quaternion Rotation;
+            internal Vector3 Position;
+        }
         private Quaternion _panoramaRotation;
         private Vector3 _panoramaPosition;
         private TimedGazeFrame? _segmentStartSample;
@@ -77,6 +88,10 @@ namespace XRLumina._Core.Service
         /// <summary>연속 기록을 종료하고 이미 생성된 구간들의 업로드를 요청한다.</summary>
         internal void FinishFeature()
         {
+            if (_isStationaryConfirmed)
+            {
+                SendConfirmedSegment();
+            }
             _recentGaze.Clear();
             _requestGaze.Clear();
             _hasStationaryCandidate = false;
@@ -87,9 +102,10 @@ namespace XRLumina._Core.Service
         /// <summary>설정된 FPS로 시선을 계속 기록하면서 플레이어 위치의 정지 구간을 판정한다.</summary>
         internal IEnumerator RecordingLoop()
         {
-            var delay = new WaitForSeconds(1f / Mathf.Max(1, _framesPerSecond));
+            var delay = new WaitForSecondsRealtime(1f / Mathf.Max(1, _framesPerSecond));
             while (true)
             {
+                SendReadySegments();
                 var camera = ResolveCamera();
                 if (_client.IsMeasuring && camera != null)
                 {
@@ -120,7 +136,7 @@ namespace XRLumina._Core.Service
 
             var playerPosition = movementSource.position;
             var cameraTransform = camera.transform;
-            var gaze = CreateGazeFrame(_frameIndex++, Time.time, cameraTransform);
+            var gaze = CreateGazeFrame(_frameIndex++, _client.MeasurementTime, cameraTransform);
             if (!_hasStationaryCandidate)
             {
                 BeginStationaryCandidate(playerPosition, capturedAt);
@@ -145,6 +161,10 @@ namespace XRLumina._Core.Service
             if (_isStationaryConfirmed)
             {
                 _requestGaze.Add(gaze);
+                if (_requestGaze.Count >= Mathf.Max(1, _framesPerSecond) * 60)
+                {
+                    SendConfirmedSegment();
+                }
             }
             else if (capturedAt - _stationaryStartedAt >= GetStationaryDurationSeconds())
             {
@@ -249,49 +269,63 @@ namespace XRLumina._Core.Service
                 return;
             }
 
-            var suffix = _segmentIndex.ToString("D3");
-            SendGaze($"gaze_frames_{suffix}.json", _requestGaze);
-            SendCapture($"capture_image_{suffix}.png", _stationaryPanorama, _captureChunkSize);
-
-            // 전송 시선은 캡처 기준 좌표이므로 카메라도 같은 좌표계의 원점·항등 회전을 사용한다.
-            var poseJson = JsonUtility.ToJson(new CameraPose
+            _pendingSegments.Enqueue(new PendingSegment
             {
-                px = 0f,
-                py = 0f,
-                pz = 0f,
-                rx = 0f,
-                ry = 0f,
-                rz = 0f,
-                rw = 1f,
+                Panorama = _stationaryPanorama,
+                Frames = _requestGaze.ToArray(),
+                Rotation = _panoramaRotation,
+                Position = _panoramaPosition,
             });
-            SendCameraPose(
-                $"camera_pose_{suffix}.json",
-                System.Text.Encoding.UTF8.GetBytes(poseJson));
-            _segmentIndex++;
             _requestGaze.Clear();
+            SendReadySegments();
         }
 
-        /// <summary>구간 시작 위치에서 파노라마를 촬영하고 정면이 중앙에 오도록 픽셀을 순환 이동한다.</summary>
-        private byte[] CapturePanorama(Camera source, Vector3 position, int shiftPixels)
+        /// <summary>캡처·인코딩이 끝난 구간만 순서대로 전송하고 실패 원인을 보존한다.</summary>
+        private void SendReadySegments()
         {
-            if (source == null)
+            while (_pendingSegments.Count > 0 && _pendingSegments.Peek().Panorama.IsCompleted)
             {
-                return null;
+                var segment = _pendingSegments.Peek();
+                if (segment.Panorama.IsFaulted || segment.Panorama.IsCanceled)
+                {
+                    _captureError = segment.Panorama.Exception?.GetBaseException().Message ?? "panorama capture canceled";
+                    Debug.LogError($"[EyeTracking] 파노라마 캡처 실패: {_captureError}");
+                    _pendingSegments.Dequeue();
+                    continue;
+                }
+                var suffix = _segmentIndex.ToString("D3");
+                SendGaze($"gaze_frames_{suffix}.json", segment.Frames, segment.Rotation, segment.Position);
+                SendCapture($"capture_image_{suffix}.png", segment.Panorama.Result, _captureChunkSize);
+                // 전송 시선은 캡처 기준 좌표이므로 카메라도 같은 좌표계의 원점·항등 회전을 사용한다.
+                var poseJson = JsonUtility.ToJson(new CameraPose
+                {
+                    px = 0f,
+                    py = 0f,
+                    pz = 0f,
+                    rx = 0f,
+                    ry = 0f,
+                    rz = 0f,
+                    rw = 1f,
+                });
+                SendCameraPose(
+                    $"camera_pose_{suffix}.json",
+                    System.Text.Encoding.UTF8.GetBytes(poseJson));
+                _segmentIndex++;
+                _pendingSegments.Dequeue();
             }
+        }
 
+        /// <summary>구간 시작 위치에서 파노라마를 렌더링하고 비동기 읽기·행 보정·인코딩을 요청한다.</summary>
+        private Task<byte[]> CapturePanorama(Camera source, Vector3 position, int shiftPixels)
+        {
             var cubemapSize = Mathf.Max(1, _panoramaCubemapSize);
             var width = Mathf.Max(1, _panoramaWidth);
             var height = Mathf.Max(1, _panoramaHeight);
-            var cubemap = new RenderTexture(
-                cubemapSize,
-                cubemapSize,
-                24,
-                RenderTextureFormat.ARGB32)
+            var cubemap = new RenderTexture(cubemapSize, cubemapSize, 24, RenderTextureFormat.ARGB32)
             {
                 dimension = UnityEngine.Rendering.TextureDimension.Cube,
             };
             var panorama = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32);
-            var texture = new Texture2D(width, height, TextureFormat.RGB24, false);
             var captureObject = new GameObject("XRLumina Panorama Camera")
             {
                 hideFlags = HideFlags.HideAndDontSave,
@@ -301,62 +335,34 @@ namespace XRLumina._Core.Service
             captureCamera.enabled = false;
             captureCamera.stereoTargetEye = StereoTargetEyeMask.None;
             captureCamera.targetTexture = null;
-            captureObject.transform.SetPositionAndRotation(
-                position,
-                Quaternion.identity);
-            var previousActive = RenderTexture.active;
+            captureObject.transform.SetPositionAndRotation(position, Quaternion.identity);
             try
             {
                 cubemap.Create();
                 panorama.Create();
                 if (!captureCamera.RenderToCubemap(cubemap))
                 {
-                    return null;
+                    throw new InvalidOperationException("Panorama cubemap rendering failed.");
                 }
-                cubemap.ConvertToEquirect(
-                    panorama,
-                    Camera.MonoOrStereoscopicEye.Mono);
-                RenderTexture.active = panorama;
-                texture.ReadPixels(new Rect(0f, 0f, width, height), 0, 0);
-                var pixels = texture.GetPixels32();
-                texture.SetPixels32(ShiftPanoramaRows(pixels, width, height, shiftPixels));
-                texture.Apply(false, false);
-                return texture.EncodeToPNG();
+                cubemap.ConvertToEquirect(panorama, Camera.MonoOrStereoscopicEye.Mono);
+            }
+            catch (Exception exception)
+            {
+                panorama.Release();
+                UnityEngine.Object.Destroy(panorama);
+                return Task.FromException<byte[]>(exception);
             }
             finally
             {
-                RenderTexture.active = previousActive;
                 cubemap.Release();
-                panorama.Release();
                 UnityEngine.Object.Destroy(cubemap);
-                UnityEngine.Object.Destroy(panorama);
-                UnityEngine.Object.Destroy(texture);
                 UnityEngine.Object.Destroy(captureObject);
             }
-        }
-
-        /// <summary>각 행을 왼쪽으로 순환 이동하고 경계를 넘은 픽셀을 같은 행의 반대편에 붙인다.</summary>
-        private static Color32[] ShiftPanoramaRows(Color32[] pixels, int width, int height, int shiftPixels)
-        {
-            if (pixels == null || width <= 0 || height <= 0 || (long)width * height != pixels.Length)
+            return ImageCaptureEncoder.EncodePng(panorama, shiftPixels, () =>
             {
-                throw new ArgumentException("파노라마 크기와 픽셀 배열 길이가 일치해야 합니다.");
-            }
-
-            var shift = ((shiftPixels % width) + width) % width;
-            if (shift == 0)
-            {
-                return pixels;
-            }
-
-            var shifted = new Color32[pixels.Length];
-            for (var row = 0; row < height; row++)
-            {
-                var offset = row * width;
-                Array.Copy(pixels, offset + shift, shifted, offset, width - shift);
-                Array.Copy(pixels, offset, shifted, offset + width - shift, shift);
-            }
-            return shifted;
+                panorama.Release();
+                UnityEngine.Object.Destroy(panorama);
+            });
         }
 
         /// <summary>정지 판정 순간 n ms 전의 시선과 자세를 복원할 최근 기록만 유지한다.</summary>
@@ -411,6 +417,8 @@ namespace XRLumina._Core.Service
             _recentGaze.Clear();
             _requestGaze.Clear();
             _movementSource = null;
+            _pendingSegments.Clear();
+            _captureError = null;
             _frameIndex = 0;
             _segmentIndex = 0;
             _hasStationaryCandidate = false;
@@ -430,6 +438,24 @@ namespace XRLumina._Core.Service
                 yield break;
             }
 
+            var deadline = Time.realtimeSinceStartup + timeoutSec;
+            while (_pendingSegments.Count > 0)
+            {
+                SendReadySegments();
+                if (Time.realtimeSinceStartup >= deadline)
+                {
+                    _client.ReportMeasurementError("panorama encoding timeout");
+                    onResult?.Invoke(false, "panorama encoding timeout");
+                    yield break;
+                }
+                yield return null;
+            }
+            if (_captureError != null)
+            {
+                _client.ReportMeasurementError(_captureError);
+                onResult?.Invoke(false, _captureError);
+                yield break;
+            }
             var requestId = _client.RequestFlush("eyetracking", session.seq, 0f);
             if (requestId == null)
             {
@@ -441,14 +467,14 @@ namespace XRLumina._Core.Service
         }
 
         /// <summary>시선 충돌 지점을 이미지와 동일한 캡처 기준 좌표로 변환해 전송한다.</summary>
-        private void SendGaze(string fileName, IReadOnlyList<XRLuminaGazeFrame> frames)
+        private void SendGaze(string fileName, IReadOnlyList<XRLuminaGazeFrame> frames, Quaternion rotation, Vector3 position)
         {
             if (frames == null)
             {
                 return;
             }
 
-            var worldToCapture = Quaternion.Inverse(_panoramaRotation);
+            var worldToCapture = Quaternion.Inverse(rotation);
             Send(PacketType.EyeTrackingGaze, writer =>
             {
                 BinaryPayload.WriteString(writer, fileName);
@@ -465,7 +491,7 @@ namespace XRLumina._Core.Service
                     }
                     foreach (var point in points)
                     {
-                        var capturePoint = worldToCapture * (point - _panoramaPosition);
+                        var capturePoint = worldToCapture * (point - position);
                         writer.Write(capturePoint.x);
                         writer.Write(capturePoint.y);
                         writer.Write(capturePoint.z);

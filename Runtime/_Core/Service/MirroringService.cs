@@ -1,5 +1,5 @@
 using System.Collections;
-using Unity.Collections;
+using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
@@ -20,6 +20,7 @@ namespace XRLumina._Core.Service
         private int _bufferWidth;
         private int _bufferHeight;
         private bool _readbackPending;
+        private Task<byte[]> _encodingTask;
         private bool _isStreaming;
         private int _streamGeneration;
 
@@ -59,6 +60,12 @@ namespace XRLumina._Core.Service
         {
             _streamGeneration++;
             _isStreaming = false;
+            if (_encodingTask != null)
+            {
+                // 중단된 세대의 작업 오류도 관찰하고 결과 프레임은 폐기한다.
+                _encodingTask.ContinueWith(task => { var error = task.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+                _encodingTask = null;
+            }
             ReleaseBuffers();
             _readbackPending = false;
         }
@@ -66,12 +73,19 @@ namespace XRLumina._Core.Service
         /// <summary>설정된 주기에 맞춰 매 프레임 캡처를 요청한다.</summary>
         internal IEnumerator StreamLoop()
         {
-            var delay = new WaitForSeconds(1f / Mathf.Max(1, _framesPerSecond));
+            var endOfFrame = new WaitForEndOfFrame();
+            var interval = 1f / Mathf.Max(1, _framesPerSecond);
+            var nextCaptureAt = Time.realtimeSinceStartup;
             while (true)
             {
-                yield return new WaitForEndOfFrame();
-                CaptureFrame();
-                yield return delay;
+                yield return endOfFrame;
+                CompleteEncoding();
+                var now = Time.realtimeSinceStartup;
+                if (now >= nextCaptureAt)
+                {
+                    CaptureFrame();
+                    nextCaptureAt = now + interval;
+                }
             }
         }
 
@@ -79,7 +93,7 @@ namespace XRLumina._Core.Service
         private void CaptureFrame()
         {
             var camera = ResolveCamera();
-            if (!_isStreaming || camera == null || _sender == null || _readbackPending)
+            if (!_isStreaming || camera == null || _sender == null || _readbackPending || _encodingTask != null)
             {
                 return;
             }
@@ -87,6 +101,7 @@ namespace XRLumina._Core.Service
             var targetWidth = Mathf.Max(1, _width);
             var targetHeight = Mathf.Max(1, _height);
             EnsureBuffers(targetWidth, targetHeight);
+            var target = _renderTexture;
             var previousTarget = camera.targetTexture;
             try
             {
@@ -98,8 +113,26 @@ namespace XRLumina._Core.Service
                     _renderTexture,
                     0,
                     TextureFormat.RGB24,
-                    request => OnReadbackComplete(request, generation)
+                    request =>
+                    {
+                        try
+                        {
+                            OnReadbackComplete(request, generation);
+                        }
+                        finally
+                        {
+                            if (generation != _streamGeneration || target != _renderTexture)
+                            {
+                                ReleaseTexture(target);
+                            }
+                        }
+                    }
                 );
+            }
+            catch (System.Exception exception)
+            {
+                _readbackPending = false;
+                Debug.LogWarning($"[Mirroring] GPU 캡처 실패: {exception.Message}");
             }
             finally
             {
@@ -120,21 +153,31 @@ namespace XRLumina._Core.Service
                 return;
             }
 
-            NativeArray<byte> encoded = ImageConversion.EncodeNativeArrayToJPG(
-                request.GetData<byte>(),
-                GraphicsFormat.R8G8B8_UNorm,
-                (uint)_bufferWidth,
-                (uint)_bufferHeight,
-                0,
-                Mathf.Clamp(_jpegQuality, 1, 100)
-            );
-            try
+            var pixels = request.GetData<byte>().ToArray();
+            var width = (uint)_bufferWidth;
+            var height = (uint)_bufferHeight;
+            var quality = Mathf.Clamp(_jpegQuality, 1, 100);
+            _encodingTask = Task.Run(() => ImageConversion.EncodeArrayToJPG(
+                pixels, GraphicsFormat.R8G8B8_UNorm, width, height, 0, quality));
+        }
+
+        /// <summary>인코딩이 끝난 최신 프레임을 전송하고 작업 오류를 Unity 로그로 전달한다.</summary>
+        private void CompleteEncoding()
+        {
+            if (_encodingTask == null || !_encodingTask.IsCompleted)
             {
-                _sender.SendMirrorFrame(encoded.ToArray());
+                return;
             }
-            finally
+            var task = _encodingTask;
+            _encodingTask = null;
+            if (task.IsFaulted)
             {
-                encoded.Dispose();
+                Debug.LogWarning($"[Mirroring] JPEG 인코딩 실패: {task.Exception?.GetBaseException().Message}");
+                return;
+            }
+            if (_isStreaming)
+            {
+                _sender.SendMirrorFrame(task.Result);
             }
         }
 
@@ -153,17 +196,29 @@ namespace XRLumina._Core.Service
             _renderTexture = new RenderTexture(targetWidth, targetHeight, 24, RenderTextureFormat.ARGB32);
         }
 
-        /// <summary>생성된 렌더링 및 인코딩 버퍼를 해제한다.</summary>
+        /// <summary>읽기 중인 렌더링 버퍼는 완료 콜백에서 해제하고 현재 버퍼 참조를 초기화한다.</summary>
         private void ReleaseBuffers()
         {
             if (_renderTexture != null)
             {
-                _renderTexture.Release();
-                UnityEngine.Object.Destroy(_renderTexture);
+                if (!_readbackPending)
+                {
+                    ReleaseTexture(_renderTexture);
+                }
                 _renderTexture = null;
             }
             _bufferWidth = 0;
             _bufferHeight = 0;
+        }
+
+        /// <summary>GPU 읽기가 완료된 렌더링 버퍼의 네이티브 자원을 해제한다.</summary>
+        private static void ReleaseTexture(RenderTexture target)
+        {
+            if (target != null)
+            {
+                target.Release();
+                UnityEngine.Object.Destroy(target);
+            }
         }
 
         /// <summary>클라이언트에 연결된 활성 HMD 카메라를 캡처 대상으로 반환한다.</summary>
