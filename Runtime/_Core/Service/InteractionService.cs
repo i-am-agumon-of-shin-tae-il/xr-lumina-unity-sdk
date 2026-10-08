@@ -86,7 +86,7 @@ namespace XRLumina._Core.Service
                 GetEventTypeName(type),
                 "ReportCount",
                 0,
-                DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"),
+                _client.GetMeasurementTimestamp(),
                 source.position);
         }
 
@@ -165,13 +165,13 @@ namespace XRLumina._Core.Service
         /// <summary>지정된 간격마다 머리와 몸의 위치·회전을 전송한다.</summary>
         private IEnumerator TrackingLoop(int framesPerSecond)
         {
-            var delay = new WaitForSeconds(1f / framesPerSecond);
+            var delay = new WaitForSecondsRealtime(1f / framesPerSecond);
             while (true)
             {
                 if (_client.IsMeasuring)
                 {
                     SendTracking(
-                        DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"),
+                        _client.GetMeasurementTimestamp(),
                         _resolveHead?.Invoke(),
                         _resolveBody?.Invoke());
                 }

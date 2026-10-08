@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.XR;
 using XRLumina._Core.Infrastructure;
@@ -39,10 +40,10 @@ namespace XRLumina._Core.Service
         private readonly int _captureWidth;
         private readonly int _captureHeight;
         private readonly int _captureChunkSize;
-        private readonly Queue<PositionSample> _positionSamples = new();
+        private readonly LinkedList<PositionSample> _positionSamples = new();
         private readonly Queue<float> _yawReversalTimes = new();
         private readonly Dictionary<string, Queue<float>> _interactionTimes = new();
-        private readonly Dictionary<string, bool> _inputStates = new();
+        private readonly Dictionary<(string Hand, string Input), bool> _inputStates = new();
         private float _stationaryDistance;
         private bool _stationaryCaptured;
         private bool _hasYaw;
@@ -51,6 +52,7 @@ namespace XRLumina._Core.Service
         private float _yawSwingDegrees;
         private bool _captureInProgress;
         private int _captureIndex;
+        private string _captureError;
 
         /// <summary>휴리스틱 판정 기준과 캡처 설정으로 서비스를 생성한다.</summary>
         internal HeuristicScreenshotService(
@@ -169,7 +171,18 @@ namespace XRLumina._Core.Service
                 var camera = ResolveCamera();
                 if (camera != null)
                 {
-                    var png = CaptureCamera(camera);
+                    var capture = CaptureCamera(camera);
+                    while (!capture.IsCompleted)
+                    {
+                        yield return null;
+                    }
+                    if (capture.IsFaulted)
+                    {
+                        _captureError = capture.Exception?.GetBaseException().Message ?? "capture failed";
+                        Debug.LogError($"[HeuristicScreenshot] 캡처 실패: {_captureError}");
+                        yield break;
+                    }
+                    var png = capture.Result;
                     if (png != null && png.Length > 0)
                     {
                         SendCapture(trigger, png);
@@ -193,6 +206,12 @@ namespace XRLumina._Core.Service
                 yield return null;
             }
 
+            if (_captureError != null)
+            {
+                _client.ReportMeasurementError(_captureError);
+                onResult?.Invoke(false, _captureError);
+                yield break;
+            }
             var session = _client.Session;
             if (session == null)
             {
@@ -212,23 +231,25 @@ namespace XRLumina._Core.Service
         private HeuristicScreenshotTrigger? UpdateStationary(Vector3 position, float now)
         {
             var current = new PositionSample(now, new Vector2(position.x, position.z));
-            _positionSamples.Enqueue(current);
+            if (_positionSamples.Last != null)
+            {
+                _stationaryDistance += Vector2.Distance(_positionSamples.Last.Value.Position, current.Position);
+            }
+            _positionSamples.AddLast(current);
 
             while (_positionSamples.Count > 1)
             {
-                var samples = _positionSamples.ToArray();
-                if (now - samples[1].Time < _stationaryDurationSeconds)
+                var first = _positionSamples.First;
+                var second = first.Next;
+                if (now - second.Value.Time < _stationaryDurationSeconds)
                 {
                     break;
                 }
-                var removed = _positionSamples.Dequeue();
-                if (_positionSamples.Count > 0)
-                {
-                    _stationaryDistance -= Vector2.Distance(removed.Position, _positionSamples.Peek().Position);
-                }
+                _stationaryDistance -= Vector2.Distance(first.Value.Position, second.Value.Position);
+                _positionSamples.RemoveFirst();
             }
 
-            _stationaryDistance = Mathf.Max(0f, CalculateCumulativeDistance(_positionSamples));
+            _stationaryDistance = Mathf.Max(0f, _stationaryDistance);
             if (_stationaryDistance > _stationaryMovementThreshold)
             {
                 _stationaryCaptured = false;
@@ -237,7 +258,7 @@ namespace XRLumina._Core.Service
             if (
                 _stationaryCaptured ||
                 _positionSamples.Count < 2 ||
-                now - _positionSamples.Peek().Time < _stationaryDurationSeconds)
+                now - _positionSamples.First.Value.Time < _stationaryDurationSeconds)
             {
                 return null;
             }
@@ -313,7 +334,7 @@ namespace XRLumina._Core.Service
             string input,
             float now)
         {
-            var stateKey = $"{hand}:{input}";
+            var stateKey = (hand, input);
             var pressed = device.TryGetFeatureValue(usage, out var value) && value;
             var wasPressed = _inputStates.TryGetValue(stateKey, out var previous) && previous;
             _inputStates[stateKey] = pressed;
@@ -332,38 +353,31 @@ namespace XRLumina._Core.Service
             {
                 return null;
             }
-            return RecordInteraction(hit.collider.gameObject, stateKey, now);
+            return RecordInteraction(hit.collider.gameObject, $"{hand}:{input}", now);
         }
 
-        /// <summary>현재 카메라 영상을 지정 해상도의 PNG로 생성한다.</summary>
-        private byte[] CaptureCamera(Camera source)
+        /// <summary>현재 카메라 영상을 렌더링하고 비동기 읽기·PNG 인코딩을 요청한다.</summary>
+        private Task<byte[]> CaptureCamera(Camera source)
         {
             var width = Mathf.Max(1, _captureWidth);
             var height = Mathf.Max(1, _captureHeight);
             var target = RenderTexture.GetTemporary(width, height, 24, RenderTextureFormat.ARGB32);
             var previousTarget = source.targetTexture;
-            var previousActive = RenderTexture.active;
-            Texture2D texture = null;
             try
             {
                 source.targetTexture = target;
                 source.Render();
-                RenderTexture.active = target;
-                texture = new Texture2D(width, height, TextureFormat.RGB24, false);
-                texture.ReadPixels(new Rect(0f, 0f, width, height), 0, 0);
-                texture.Apply();
-                return texture.EncodeToPNG();
+            }
+            catch
+            {
+                RenderTexture.ReleaseTemporary(target);
+                throw;
             }
             finally
             {
                 source.targetTexture = previousTarget;
-                RenderTexture.active = previousActive;
-                RenderTexture.ReleaseTemporary(target);
-                if (texture != null)
-                {
-                    UnityEngine.Object.Destroy(texture);
-                }
             }
+            return ImageCaptureEncoder.EncodePng(target, 0, () => RenderTexture.ReleaseTemporary(target));
         }
 
         /// <summary>휴리스틱 이미지와 원인 정보를 지정 크기의 바이너리 청크로 전송한다.</summary>
@@ -393,24 +407,6 @@ namespace XRLumina._Core.Service
             }
         }
 
-        /// <summary>위치 샘플 사이의 누적 이동거리를 계산한다.</summary>
-        private static float CalculateCumulativeDistance(IEnumerable<PositionSample> samples)
-        {
-            var hasPrevious = false;
-            var previous = Vector2.zero;
-            var total = 0f;
-            foreach (var sample in samples)
-            {
-                if (hasPrevious)
-                {
-                    total += Vector2.Distance(previous, sample.Position);
-                }
-                previous = sample.Position;
-                hasPrevious = true;
-            }
-            return total;
-        }
-
         /// <summary>캡처와 정면 Raycast에 사용할 카메라를 반환한다.</summary>
         private Camera ResolveCamera()
         {
@@ -438,6 +434,7 @@ namespace XRLumina._Core.Service
             _yawSwingDegrees = 0f;
             _captureInProgress = false;
             _captureIndex = 0;
+            _captureError = null;
         }
     }
 }

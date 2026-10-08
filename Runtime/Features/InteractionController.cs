@@ -74,6 +74,7 @@ namespace XRLumina.Features
                 heuristicCaptureChunkSize);
             _client.MeasurementStarted += StartFeature;
             _client.MeasurementFinished += FinishFeature;
+            _client.FlushRequested += RetryFlush;
         }
 
         /// <summary>상호작용 측정 시작을 서비스에 전달한다.</summary>
@@ -93,13 +94,28 @@ namespace XRLumina.Features
         {
             _service?.FinishFeature();
             StopTracking();
+            RetryFlush();
+        }
+
+        /// <summary>측정 기록을 다시 생성하지 않고 업로드 요청만 재전송한다.</summary>
+        private void RetryFlush()
+        {
             if (_service != null)
             {
-                StartCoroutine(_service.Flush(framesPerSecond, 60f, null));
+                StartCoroutine(_service.Flush(framesPerSecond, 180f, LogFlushResult));
             }
             if (_heuristicScreenshotService != null)
             {
-                StartCoroutine(_heuristicScreenshotService.FinishAndFlush(60f, null));
+                StartCoroutine(_heuristicScreenshotService.FinishAndFlush(180f, LogFlushResult));
+            }
+        }
+
+        /// <summary>종료 응답 실패를 Unity 로그에 전달한다.</summary>
+        private void LogFlushResult(bool ok, string error)
+        {
+            if (!ok)
+            {
+                Debug.LogError($"[XRLumina] 측정 데이터 종료 실패: {error}", this);
             }
         }
 
@@ -168,6 +184,7 @@ namespace XRLumina.Features
             {
                 _client.MeasurementStarted -= StartFeature;
                 _client.MeasurementFinished -= FinishFeature;
+                _client.FlushRequested -= RetryFlush;
             }
             StopTracking();
         }
