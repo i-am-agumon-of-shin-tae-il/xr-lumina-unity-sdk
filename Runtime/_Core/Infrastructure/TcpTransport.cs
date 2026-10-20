@@ -58,6 +58,16 @@ namespace XRLumina._Core.Infrastructure
         /// <summary>연결된 스트림의 비동기 송신 대기열에 패킷 하나를 추가한다.</summary>
         public bool Send(PacketType type, byte[] payload)
         {
+            return Send(type, new ArraySegment<byte>(payload));
+        }
+
+        /// <summary>버퍼의 유효 구간을 복사하지 않고 송신 대기열에 추가한다.</summary>
+        public bool Send(PacketType type, ArraySegment<byte> payload)
+        {
+            if (payload.Array == null)
+            {
+                throw new ArgumentNullException(nameof(payload));
+            }
             lock (_writeLock)
             {
                 if (_stream == null)
@@ -68,7 +78,11 @@ namespace XRLumina._Core.Infrastructure
 
             if (type == PacketType.MirrorFrame)
             {
-                Interlocked.Exchange(ref _latestMirrorFrame, payload);
+                if (payload.Offset != 0 || payload.Count != payload.Array.Length)
+                {
+                    throw new ArgumentException("mirror frame must use the entire buffer", nameof(payload));
+                }
+                Interlocked.Exchange(ref _latestMirrorFrame, payload.Array);
             }
             else
             {
@@ -79,7 +93,7 @@ namespace XRLumina._Core.Infrastructure
         }
 
         /// <summary>전송하지 못한 패킷을 제한된 재전송 대기열에 추가한다.</summary>
-        public void Enqueue(PacketType type, byte[] payload)
+        public void Enqueue(PacketType type, ArraySegment<byte> payload)
         {
             while (Volatile.Read(ref _pendingPacketCount) >= MaxPendingPackets &&
                    _pendingPackets.TryDequeue(out _))
@@ -96,9 +110,9 @@ namespace XRLumina._Core.Infrastructure
             while (_pendingPackets.TryDequeue(out var packet))
             {
                 Interlocked.Decrement(ref _pendingPacketCount);
-                if (!Send(packet.Type, packet.Payload))
+                if (!Send(packet.Type, packet.PayloadSegment))
                 {
-                    Enqueue(packet.Type, packet.Payload);
+                    Enqueue(packet.Type, packet.PayloadSegment);
                     break;
                 }
             }
@@ -166,7 +180,7 @@ namespace XRLumina._Core.Infrastructure
 
             try
             {
-                PacketCodec.Write(stream, packet.Type, packet.Payload);
+                PacketCodec.Write(stream, packet.Type, packet.PayloadSegment);
             }
             catch (Exception exception)
             {
@@ -181,7 +195,7 @@ namespace XRLumina._Core.Infrastructure
         {
             if (packet.Type != PacketType.MirrorFrame)
             {
-                Enqueue(packet.Type, packet.Payload);
+                Enqueue(packet.Type, packet.PayloadSegment);
             }
         }
 

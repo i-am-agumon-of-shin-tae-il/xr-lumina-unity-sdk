@@ -39,23 +39,24 @@ namespace XRLumina._Core.Infrastructure
             return true;
         }
 
-        public static void Write(Stream stream, PacketType type, byte[] payload)
+        /// <summary>페이로드의 유효 구간만 길이 헤더와 함께 전송한다.</summary>
+        public static void Write(Stream stream, PacketType type, ArraySegment<byte> payload)
         {
-            if (payload == null)
+            if (payload.Array == null)
             {
                 throw new ArgumentNullException(nameof(payload));
             }
 
             var header = new byte[HeaderLength];
             header[0] = (byte)type;
-            header[1] = (byte)((payload.Length >> 24) & 0xff);
-            header[2] = (byte)((payload.Length >> 16) & 0xff);
-            header[3] = (byte)((payload.Length >> 8) & 0xff);
-            header[4] = (byte)(payload.Length & 0xff);
+            header[1] = (byte)((payload.Count >> 24) & 0xff);
+            header[2] = (byte)((payload.Count >> 16) & 0xff);
+            header[3] = (byte)((payload.Count >> 8) & 0xff);
+            header[4] = (byte)(payload.Count & 0xff);
             stream.Write(header, 0, header.Length);
-            if (payload.Length > 0)
+            if (payload.Count > 0)
             {
-                stream.Write(payload, 0, payload.Length);
+                stream.Write(payload.Array, payload.Offset, payload.Count);
             }
         }
 

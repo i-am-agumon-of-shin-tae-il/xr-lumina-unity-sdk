@@ -41,9 +41,9 @@ namespace XRLumina._Core.Messaging
         }
 
         /// <summary>측정 바이너리 패킷을 전송하고 미연결이면 재전송 큐에 추가한다.</summary>
-        internal void SendStream(PacketType type, byte[] payload)
+        internal void SendStream(PacketType type, System.ArraySegment<byte> payload)
         {
-            if (payload == null)
+            if (payload.Array == null)
             {
                 return;
             }
