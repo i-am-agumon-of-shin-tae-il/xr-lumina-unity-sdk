@@ -1,23 +1,28 @@
+using XRLumina.Protocol;
+
 namespace XRLumina._Core.Model
 {
     /// <summary>휴리스틱 스크린샷을 생성한 조건과 부가 정보를 표현한다.</summary>
     internal readonly struct HeuristicScreenshotTrigger
     {
-        internal string Type { get; }
+        internal HeuristicTrigger Type { get; }
+        internal ControllerHand Hand { get; }
         internal float CapturedAt { get; }
         internal string ObjectName { get; }
-        internal string ControllerInput { get; }
+        internal ControllerInput ControllerInput { get; }
 
         internal HeuristicScreenshotTrigger(
-            string type,
+            HeuristicTrigger type,
             float capturedAt,
             string objectName = "",
-            string controllerInput = "")
+            ControllerInput controllerInput = ControllerInput.None,
+            ControllerHand hand = ControllerHand.Unknown)
         {
             Type = type;
             CapturedAt = capturedAt;
             ObjectName = objectName ?? "";
-            ControllerInput = controllerInput ?? "";
+            ControllerInput = controllerInput;
+            Hand = hand;
         }
     }
 }

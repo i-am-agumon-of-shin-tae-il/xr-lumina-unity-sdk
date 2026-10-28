@@ -9,7 +9,7 @@ namespace XRLumina.Sample
     [RequireComponent(typeof(Collider))]
     public sealed class XRLuminaSampleInteractionTarget : MonoBehaviour
     {
-        [SerializeField] private XRLuminaInteractionEventType interactionType;
+        [SerializeField] private XRLumina.Protocol.EventKind interactionType;
         [SerializeField] private Renderer targetRenderer;
         [SerializeField] private float feedbackDuration = 0.1f;
 
@@ -60,7 +60,7 @@ namespace XRLumina.Sample
             InteractionController.Instance?.RecordInteractionEvent(
                 interactionType,
                 gameObject,
-                "Interact");
+                XRLumina.Protocol.ControllerInput.Interact);
             if (_feedbackCoroutine != null)
             {
                 StopCoroutine(_feedbackCoroutine);

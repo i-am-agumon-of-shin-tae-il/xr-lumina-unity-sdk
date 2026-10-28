@@ -1,76 +1,62 @@
 using System;
 using System.IO;
-using XRLumina._Core.Model;
+using XRLumina.Protocol;
 
 namespace XRLumina._Core.Infrastructure
 {
-    /// <summary>TCP 스트림과 SDK 패킷 사이의 프레이밍을 처리한다.</summary>
+    /// <summary>TCP·USB 스트림에서 표준 size-prefixed FlatBuffers 메시지를 조립한다.</summary>
     internal static class PacketCodec
     {
-        private const int HeaderLength = 5;
-        private const int MaxPayloadLength = 64 * 1024 * 1024;
-
-        public static bool TryRead(Stream stream, out NetworkPacket packet)
+        /// <summary>분할 수신된 길이 접두사와 본문을 모아 공통 코덱으로 검증한다.</summary>
+        public static bool TryRead(Stream stream, out Envelope envelope)
         {
-            packet = default;
-            var header = new byte[HeaderLength];
-            if (!ReadExact(stream, header, HeaderLength))
+            envelope = default;
+            var prefix = new byte[4];
+            if (!ReadExact(stream, prefix, 4))
             {
                 return false;
             }
-
-            var payloadLength =
-                (header[1] << 24) |
-                (header[2] << 16) |
-                (header[3] << 8) |
-                header[4];
-            if (payloadLength < 0 || payloadLength > MaxPayloadLength)
+            var length = (uint)prefix[0] | ((uint)prefix[1] << 8) | ((uint)prefix[2] << 16) | ((uint)prefix[3] << 24);
+            if (length < 12 || length > FlatBufferCodec.MaxMessageBytes)
             {
-                throw new InvalidDataException($"invalid packet payload length: {payloadLength}");
+                throw new InvalidDataException($"invalid message length: {length}");
             }
-
-            var payload = new byte[payloadLength];
-            if (payloadLength > 0 && !ReadExact(stream, payload, payloadLength))
+            var frame = new byte[checked((int)length + 4)];
+            Buffer.BlockCopy(prefix, 0, frame, 0, 4);
+            if (!ReadExact(stream, frame, (int)length, 4))
             {
-                return false;
+                throw new EndOfStreamException("truncated FlatBuffers message");
             }
-
-            packet = new NetworkPacket((PacketType)header[0], payload);
+            envelope = FlatBufferCodec.Decode(frame);
             return true;
         }
 
-        /// <summary>페이로드의 유효 구간만 길이 헤더와 함께 전송한다.</summary>
-        public static void Write(Stream stream, PacketType type, ArraySegment<byte> payload)
+        /// <summary>공통 코덱이 작성한 메시지를 추가 커스텀 헤더 없이 전송한다.</summary>
+        public static void Write(Stream stream, ArraySegment<byte> frame)
         {
-            if (payload.Array == null)
+            if (frame.Array == null || frame.Count < 16 || frame.Count - 4 > FlatBufferCodec.MaxMessageBytes)
             {
-                throw new ArgumentNullException(nameof(payload));
+                throw new InvalidDataException("invalid message buffer");
             }
-
-            var header = new byte[HeaderLength];
-            header[0] = (byte)type;
-            header[1] = (byte)((payload.Count >> 24) & 0xff);
-            header[2] = (byte)((payload.Count >> 16) & 0xff);
-            header[3] = (byte)((payload.Count >> 8) & 0xff);
-            header[4] = (byte)(payload.Count & 0xff);
-            stream.Write(header, 0, header.Length);
-            if (payload.Count > 0)
-            {
-                stream.Write(payload.Array, payload.Offset, payload.Count);
-            }
+            stream.Write(frame.Array, frame.Offset, frame.Count);
         }
 
-        private static bool ReadExact(Stream stream, byte[] buffer, int count)
+        /// <summary>요청한 바이트 수를 모두 읽으며 헤더 중간에 종료된 스트림은 거부한다.</summary>
+        private static bool ReadExact(Stream stream, byte[] buffer, int count, int offset = 0)
         {
-            var offset = 0;
-            while (offset < count)
+            var readBytes = 0;
+            while (readBytes < count)
             {
-                var read = stream.Read(buffer, offset, count - offset);
+                var read = stream.Read(buffer, offset + readBytes, count - readBytes);
                 if (read <= 0)
                 {
+                    if (readBytes > 0)
+                    {
+                        throw new EndOfStreamException("truncated FlatBuffers message");
+                    }
                     return false;
                 }
-                offset += read;
+                readBytes += read;
             }
             return true;
         }

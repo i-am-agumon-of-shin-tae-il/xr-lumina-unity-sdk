@@ -1,0 +1,1 @@
+-keep class com.ninefive.xrlumina.UsbAccessoryBridge { public *; }

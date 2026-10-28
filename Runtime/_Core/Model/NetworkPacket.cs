@@ -1,13 +1,12 @@
 using System;
-using XRLumina._Core.Infrastructure;
+using PacketType = XRLumina.Protocol.Message;
 
 namespace XRLumina._Core.Model
 {
-    /// <summary>프레이밍이 완료된 패킷 타입과 페이로드.</summary>
+    /// <summary>송신 대기열이 보관하는 메시지 타입과 인코딩된 버퍼 구간.</summary>
     internal readonly struct NetworkPacket
     {
         public readonly PacketType Type;
-        public readonly byte[] Payload;
         public readonly ArraySegment<byte> PayloadSegment;
 
         /// <summary>전체 바이트 배열을 유효 페이로드로 보관한다.</summary>
@@ -20,7 +19,6 @@ namespace XRLumina._Core.Model
         public NetworkPacket(PacketType type, ArraySegment<byte> payload)
         {
             Type = type;
-            Payload = payload.Array;
             PayloadSegment = payload;
         }
     }

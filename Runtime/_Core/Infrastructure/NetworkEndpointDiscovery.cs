@@ -3,14 +3,13 @@ using System.Collections.Generic;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
-using System.Text;
 using XRLumina._Core.Model;
 
 namespace XRLumina._Core.Infrastructure
 {
     /// <summary>
     /// 고정 호스트를 사용하거나 UDP 브로드캐스트로 TCP 연결 대상을 찾는다.
-    /// 요청 문자열과 응답 해석은 외부에서 주입받아 특정 제품 프로토콜에 의존하지 않는다.
+    /// 요청 바이트과 응답 해석은 외부에서 주입받아 특정 제품 프로토콜에 의존하지 않는다.
     /// </summary>
     internal sealed class NetworkEndpointDiscovery
     {
@@ -18,8 +17,8 @@ namespace XRLumina._Core.Infrastructure
         private readonly int _port;
         private readonly int _discoveryPort;
         private readonly int _timeoutMs;
-        private readonly string _requestMessage;
-        private readonly Func<string, DiscoveryAdvertisement> _parseResponse;
+        private readonly byte[] _requestMessage;
+        private readonly Func<byte[], DiscoveryAdvertisement> _parseResponse;
 
         /// <summary>고정 주소와 UDP 탐색 설정 및 응답 해석기를 구성한다.</summary>
         public NetworkEndpointDiscovery(
@@ -27,8 +26,8 @@ namespace XRLumina._Core.Infrastructure
             int port,
             int discoveryPort,
             int timeoutMs,
-            string requestMessage,
-            Func<string, DiscoveryAdvertisement> parseResponse
+            byte[] requestMessage,
+            Func<byte[], DiscoveryAdvertisement> parseResponse
         )
         {
             _fixedHost = fixedHost;
@@ -51,7 +50,7 @@ namespace XRLumina._Core.Infrastructure
             {
                 udp.EnableBroadcast = true;
                 udp.Client.ReceiveTimeout = _timeoutMs;
-                var request = Encoding.UTF8.GetBytes(_requestMessage);
+                var request = _requestMessage;
                 SocketException sendError = null;
                 var sent = 0;
                 foreach (var broadcastAddress in GetBroadcastAddresses())
@@ -85,7 +84,7 @@ namespace XRLumina._Core.Infrastructure
                     var remote = new IPEndPoint(IPAddress.Any, 0);
                     try
                     {
-                        var response = Encoding.UTF8.GetString(udp.Receive(ref remote));
+                        var response = udp.Receive(ref remote);
                         var result = _parseResponse(response);
                         var port = result.Port > 0 ? result.Port : _port;
                         var key = string.IsNullOrWhiteSpace(result.InstanceId)
@@ -98,7 +97,6 @@ namespace XRLumina._Core.Infrastructure
                         break;
                     }
                     catch (System.IO.InvalidDataException) { }
-                    catch (Newtonsoft.Json.JsonException) { }
                 }
                 return new List<NetworkEndpoint>(endpoints.Values);
             }

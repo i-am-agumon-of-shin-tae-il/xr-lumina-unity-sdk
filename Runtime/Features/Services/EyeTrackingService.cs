@@ -1,0 +1,469 @@
+using XRLumina.Client;
+using System;
+using Wire = XRLumina.Protocol;
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+using XRLumina._Core.Infrastructure;
+using XRLumina._Core.Messaging.Senders;
+using XRLumina._Core.Model;
+
+namespace XRLumina._Core.Service
+{
+    internal sealed class EyeTrackingService
+    {
+        private readonly MessageSender _sender;
+        private readonly XRLuminaClient _client;
+        private readonly System.Func<Camera> _resolveCamera;
+        private readonly Func<Transform> _resolveMovementSource;
+        private Transform _movementSource;
+        private readonly LayerMask _gazeLayerMask;
+        private readonly float _maxDistance;
+        private readonly int _framesPerSecond;
+        private readonly int _stationaryDurationMs;
+        private readonly float _movementThresholdMeters;
+        private readonly int _panoramaWidth;
+        private readonly int _panoramaHeight;
+        private readonly int _panoramaCubemapSize;
+        private readonly List<TimedGazeFrame> _recentGaze = new();
+        private readonly List<XRLuminaGazeFrame> _requestGaze = new();
+        private int _frameIndex;
+        private int _segmentIndex;
+        private bool _hasStationaryCandidate;
+        private bool _isStationaryConfirmed;
+        private float _stationaryStartedAt;
+        private Vector3 _positionAnchor;
+        private byte[] _stationaryPanorama;
+        private Quaternion _panoramaRotation;
+        private Vector3 _panoramaPosition;
+        private TimedGazeFrame? _segmentStartSample;
+
+        /// <summary>Unity 실행 호스트, SDK 의존성, 시선 기록 설정으로 서비스를 생성한다.</summary>
+        internal EyeTrackingService(
+            XRLuminaClient client,
+            System.Func<Camera> resolveCamera,
+            Func<Transform> resolveMovementSource,
+            LayerMask gazeLayerMask,
+            float maxDistance,
+            int framesPerSecond,
+            int stationaryDurationMs,
+            float movementThresholdMeters,
+            int panoramaWidth,
+            int panoramaHeight,
+            int panoramaCubemapSize)
+        {
+            _client = client;
+            _sender = client.MessageSender;
+            _resolveCamera = resolveCamera;
+            _resolveMovementSource = resolveMovementSource;
+            _gazeLayerMask = gazeLayerMask;
+            _maxDistance = maxDistance;
+            _framesPerSecond = framesPerSecond;
+            _stationaryDurationMs = stationaryDurationMs;
+            _movementThresholdMeters = movementThresholdMeters;
+            _panoramaWidth = panoramaWidth;
+            _panoramaHeight = panoramaHeight;
+            _panoramaCubemapSize = panoramaCubemapSize;
+        }
+
+        /// <summary>이전 기록을 초기화하고 연속 시선 기록과 정지 감지를 시작한다.</summary>
+        internal IEnumerator StartFeature()
+        {
+            ResetState();
+            return RecordingLoop();
+        }
+
+        /// <summary>연속 기록을 종료하고 이미 생성된 구간들의 업로드를 요청한다.</summary>
+        internal void FinishFeature()
+        {
+            _recentGaze.Clear();
+            _requestGaze.Clear();
+            _hasStationaryCandidate = false;
+            _isStationaryConfirmed = false;
+            _stationaryPanorama = null;
+        }
+
+        /// <summary>설정된 FPS로 시선을 계속 기록하면서 플레이어 위치의 정지 구간을 판정한다.</summary>
+        internal IEnumerator RecordingLoop()
+        {
+            var delay = new WaitForSeconds(1f / Mathf.Max(1, _framesPerSecond));
+            while (true)
+            {
+                var camera = ResolveCamera();
+                if (_client.IsMeasuring && camera != null)
+                {
+                    ProcessSample(camera, Time.realtimeSinceStartup);
+                }
+                yield return delay;
+            }
+        }
+
+        /// <summary>플레이어 위치로 구간을 판정하고 HMD 위치·회전으로 시선과 카메라 자세를 기록한다.</summary>
+        private void ProcessSample(Camera camera, float capturedAt)
+        {
+            var movementSource = _resolveMovementSource?.Invoke();
+            if (movementSource == null)
+            {
+                return;
+            }
+            if (_movementSource != movementSource)
+            {
+                if (_isStationaryConfirmed)
+                {
+                    SendConfirmedSegment();
+                }
+                _recentGaze.Clear();
+                _movementSource = movementSource;
+                BeginStationaryCandidate(movementSource.position, capturedAt);
+            }
+
+            var playerPosition = movementSource.position;
+            var cameraTransform = camera.transform;
+            var gaze = CreateGazeFrame(_frameIndex++, Time.time, cameraTransform);
+            if (!_hasStationaryCandidate)
+            {
+                BeginStationaryCandidate(playerPosition, capturedAt);
+            }
+            else if (Vector3.Distance(playerPosition, _positionAnchor) >
+                     _movementThresholdMeters)
+            {
+                if (_isStationaryConfirmed)
+                {
+                    SendConfirmedSegment();
+                }
+                BeginStationaryCandidate(playerPosition, capturedAt);
+            }
+
+            _recentGaze.Add(new TimedGazeFrame(
+                capturedAt,
+                gaze,
+                cameraTransform.position,
+                cameraTransform.rotation));
+            TrimRecentGaze(capturedAt);
+
+            if (_isStationaryConfirmed)
+            {
+                _requestGaze.Add(gaze);
+            }
+            else if (capturedAt - _stationaryStartedAt >= GetStationaryDurationSeconds())
+            {
+                ConfirmStationarySegment(camera, capturedAt);
+            }
+        }
+
+        /// <summary>이동 판정용 플레이어 위치와 시각을 다음 정지 후보의 기준으로 저장한다.</summary>
+        private void BeginStationaryCandidate(Vector3 position, float capturedAt)
+        {
+            _hasStationaryCandidate = true;
+            _isStationaryConfirmed = false;
+            _stationaryStartedAt = capturedAt;
+            _positionAnchor = position;
+            _stationaryPanorama = null;
+            _panoramaRotation = Quaternion.identity;
+            _segmentStartSample = null;
+            _requestGaze.Clear();
+        }
+
+        /// <summary>정지 판정 순간 n ms 전부터의 시선을 요청 버퍼에 넣고 보정된 파노라마를 촬영한다.</summary>
+        private void ConfirmStationarySegment(Camera camera, float confirmedAt)
+        {
+            var segmentStartedAt = confirmedAt - GetStationaryDurationSeconds();
+            var startSample = FindClosestRecentSample(segmentStartedAt);
+            if (!startSample.HasValue)
+            {
+                return;
+            }
+
+            var panoramaPosition = startSample.Value.Position;
+            var forward = GetLevelRotation(startSample.Value.Rotation) * Vector3.forward;
+            var width = Mathf.Max(1, _panoramaWidth);
+            var yaw = Mathf.Atan2(forward.x, forward.z);
+            var shiftPixels = Mathf.RoundToInt(yaw / (2f * Mathf.PI) * width);
+            var panoramaRotation = Quaternion.Euler(0f, shiftPixels * 360f / width, 0f);
+            var panorama = CapturePanorama(camera, panoramaPosition, shiftPixels);
+            if (panorama == null)
+            {
+                return;
+            }
+
+            _stationaryPanorama = panorama;
+            _panoramaRotation = panoramaRotation;
+            _panoramaPosition = panoramaPosition;
+            _segmentStartSample = startSample;
+            _requestGaze.Clear();
+            foreach (var sample in _recentGaze)
+            {
+                if (sample.CapturedAt < segmentStartedAt)
+                {
+                    continue;
+                }
+                _requestGaze.Add(sample.Frame);
+            }
+            _isStationaryConfirmed = _requestGaze.Count > 0;
+        }
+
+        /// <summary>n ms 전 시각에 가장 가까운 시선·카메라 자세 샘플을 반환한다.</summary>
+        private TimedGazeFrame? FindClosestRecentSample(float capturedAt)
+        {
+            if (_recentGaze.Count == 0)
+            {
+                return null;
+            }
+
+            var closest = _recentGaze[0];
+            var closestDistance = Mathf.Abs(closest.CapturedAt - capturedAt);
+            for (var index = 1; index < _recentGaze.Count; index++)
+            {
+                var candidate = _recentGaze[index];
+                var distance = Mathf.Abs(candidate.CapturedAt - capturedAt);
+                if (distance >= closestDistance)
+                {
+                    continue;
+                }
+                closest = candidate;
+                closestDistance = distance;
+            }
+            return closest;
+        }
+
+        /// <summary>회전에서 좌우 방향만 남겨 수평 정면 회전으로 변환한다.</summary>
+        private static Quaternion GetLevelRotation(Quaternion rotation)
+        {
+            var forward = rotation * Vector3.forward;
+            forward.y = 0f;
+            if (forward.sqrMagnitude < 0.0001f)
+            {
+                forward = Vector3.forward;
+            }
+            return Quaternion.LookRotation(forward.normalized, Vector3.up);
+        }
+
+        /// <summary>정지 판정 순간 n ms 전부터 움직이기 직전까지 확정된 한 세트를 전송한다.</summary>
+        private void SendConfirmedSegment()
+        {
+            if (_requestGaze.Count == 0 ||
+                _stationaryPanorama == null ||
+                !_segmentStartSample.HasValue)
+            {
+                return;
+            }
+
+            var suffix = _segmentIndex.ToString("D3");
+            SendGaze($"gaze_frames_{suffix}.json", _requestGaze);
+            SendCapture($"capture_image_{suffix}.png", _stationaryPanorama);
+
+            // 전송 시선은 캡처 기준 좌표이므로 카메라도 같은 좌표계의 원점·항등 회전을 사용한다.
+            SendCameraPose($"camera_pose_{suffix}.json", Vector3.zero, Quaternion.identity);
+            _segmentIndex++;
+            _requestGaze.Clear();
+        }
+
+        /// <summary>구간 시작 위치에서 파노라마를 촬영하고 정면이 중앙에 오도록 픽셀을 순환 이동한다.</summary>
+        private byte[] CapturePanorama(Camera source, Vector3 position, int shiftPixels)
+        {
+            if (source == null)
+            {
+                return null;
+            }
+
+            var cubemapSize = Mathf.Max(1, _panoramaCubemapSize);
+            var width = Mathf.Max(1, _panoramaWidth);
+            var height = Mathf.Max(1, _panoramaHeight);
+            var cubemap = new RenderTexture(
+                cubemapSize,
+                cubemapSize,
+                24,
+                RenderTextureFormat.ARGB32)
+            {
+                dimension = UnityEngine.Rendering.TextureDimension.Cube,
+            };
+            var panorama = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32);
+            var texture = new Texture2D(width, height, TextureFormat.RGB24, false);
+            var captureObject = new GameObject("XRLumina Panorama Camera")
+            {
+                hideFlags = HideFlags.HideAndDontSave,
+            };
+            var captureCamera = captureObject.AddComponent<Camera>();
+            captureCamera.CopyFrom(source);
+            captureCamera.enabled = false;
+            captureCamera.stereoTargetEye = StereoTargetEyeMask.None;
+            captureCamera.targetTexture = null;
+            captureObject.transform.SetPositionAndRotation(
+                position,
+                Quaternion.identity);
+            var previousActive = RenderTexture.active;
+            try
+            {
+                cubemap.Create();
+                panorama.Create();
+                if (!captureCamera.RenderToCubemap(cubemap))
+                {
+                    return null;
+                }
+                cubemap.ConvertToEquirect(
+                    panorama,
+                    Camera.MonoOrStereoscopicEye.Mono);
+                RenderTexture.active = panorama;
+                texture.ReadPixels(new Rect(0f, 0f, width, height), 0, 0);
+                var pixels = texture.GetPixels32();
+                texture.SetPixels32(ShiftPanoramaRows(pixels, width, height, shiftPixels));
+                texture.Apply(false, false);
+                return texture.EncodeToPNG();
+            }
+            finally
+            {
+                RenderTexture.active = previousActive;
+                cubemap.Release();
+                panorama.Release();
+                UnityEngine.Object.Destroy(cubemap);
+                UnityEngine.Object.Destroy(panorama);
+                UnityEngine.Object.Destroy(texture);
+                UnityEngine.Object.Destroy(captureObject);
+            }
+        }
+
+        /// <summary>각 행을 왼쪽으로 순환 이동하고 경계를 넘은 픽셀을 같은 행의 반대편에 붙인다.</summary>
+        private static Color32[] ShiftPanoramaRows(Color32[] pixels, int width, int height, int shiftPixels)
+        {
+            if (pixels == null || width <= 0 || height <= 0 || (long)width * height != pixels.Length)
+            {
+                throw new ArgumentException("파노라마 크기와 픽셀 배열 길이가 일치해야 합니다.");
+            }
+
+            var shift = ((shiftPixels % width) + width) % width;
+            if (shift == 0)
+            {
+                return pixels;
+            }
+
+            var shifted = new Color32[pixels.Length];
+            for (var row = 0; row < height; row++)
+            {
+                var offset = row * width;
+                Array.Copy(pixels, offset + shift, shifted, offset, width - shift);
+                Array.Copy(pixels, offset, shifted, offset + width - shift, shift);
+            }
+            return shifted;
+        }
+
+        /// <summary>정지 판정 순간 n ms 전의 시선과 자세를 복원할 최근 기록만 유지한다.</summary>
+        private void TrimRecentGaze(float capturedAt)
+        {
+            var oldestAllowed = capturedAt - GetStationaryDurationSeconds() -
+                                1f / Mathf.Max(1, _framesPerSecond);
+            var removeCount = 0;
+            while (removeCount < _recentGaze.Count &&
+                   _recentGaze[removeCount].CapturedAt < oldestAllowed)
+            {
+                removeCount++;
+            }
+            if (removeCount > 0)
+            {
+                _recentGaze.RemoveRange(0, removeCount);
+            }
+        }
+
+        /// <summary>밀리초 설정값을 정지 판정에 사용할 초 단위 값으로 변환한다.</summary>
+        private float GetStationaryDurationSeconds()
+        {
+            return Mathf.Max(0, _stationaryDurationMs) / 1000f;
+        }
+
+        /// <summary>시선 레이캐스트 결과를 전송 가능한 프레임으로 생성한다.</summary>
+        private XRLuminaGazeFrame CreateGazeFrame(int frame, float time, Transform source)
+        {
+            var origin = source.position;
+            var direction = source.forward;
+            var hitPosition = Physics.Raycast(
+                origin,
+                direction,
+                out var hit,
+                _maxDistance,
+                _gazeLayerMask)
+                ? hit.point
+                : origin + direction * _maxDistance;
+
+            return new XRLuminaGazeFrame(frame, time, new[] { hitPosition });
+        }
+
+        /// <summary>클라이언트에 연결된 HMD 카메라를 시선 기록 대상으로 반환한다.</summary>
+        private Camera ResolveCamera()
+        {
+            return _resolveCamera?.Invoke();
+        }
+
+        /// <summary>새 세션 기록을 위해 런타임 상태와 버퍼를 초기화한다.</summary>
+        private void ResetState()
+        {
+            _recentGaze.Clear();
+            _requestGaze.Clear();
+            _movementSource = null;
+            _frameIndex = 0;
+            _segmentIndex = 0;
+            _hasStationaryCandidate = false;
+            _isStationaryConfirmed = false;
+            _stationaryPanorama = null;
+            _panoramaRotation = Quaternion.identity;
+            _segmentStartSample = null;
+        }
+
+        /// <summary>Electron에 아이트래킹 데이터 조합·업로드를 요청하고 응답을 기다린다.</summary>
+        internal IEnumerator Flush(float timeoutSec, Action<bool, string> onResult)
+        {
+            var session = _client.Session;
+            if (session == null)
+            {
+                onResult?.Invoke(false, "session unavailable");
+                yield break;
+            }
+
+            yield return XRLuminaClientController.Flush(_client, Wire.FlushGroup.EyeTracking, 0f, timeoutSec, onResult);
+        }
+
+        /// <summary>시선 충돌 지점을 이미지와 동일한 캡처 기준 좌표로 변환해 전송한다.</summary>
+        private void SendGaze(string fileName, IReadOnlyList<XRLuminaGazeFrame> frames)
+        {
+            if (frames == null)
+            {
+                return;
+            }
+
+            var worldToCapture = Quaternion.Inverse(_panoramaRotation);
+            var items = new List<Wire.GazeFrameT>(frames.Count);
+            foreach (var frame in frames)
+            {
+                var points = new List<Wire.Vector3T>();
+                if (frame.Points != null)
+                {
+                    foreach (var point in frame.Points)
+                    {
+                        var capturePoint = worldToCapture * (point - _panoramaPosition);
+                        points.Add(new Wire.Vector3T { X = capturePoint.x, Y = capturePoint.y, Z = capturePoint.z, });
+                    }
+                }
+                items.Add(new Wire.GazeFrameT { Frame = frame.Frame, Time = frame.Time, Points = points, });
+            }
+            _sender?.SendStream(Wire.MessageUnion.FromGaze(new Wire.GazeT { Name = fileName, Items = items, }));
+        }
+
+        /// <summary>PNG 파일을 단일 메시지로 전송하고 스트림의 분할 처리를 사용한다.</summary>
+        private void SendCapture(string fileName, byte[] bytes)
+        {
+            if (bytes != null)
+            {
+                _sender?.SendCapture(fileName, bytes);
+            }
+        }
+
+        /// <summary>카메라 위치와 회전을 스키마 필드로 전송한다.</summary>
+        private void SendCameraPose(string fileName, Vector3 position, Quaternion rotation)
+        {
+            _sender?.SendStream(Wire.MessageUnion.FromCameraPose(new Wire.CameraPoseT
+            {
+                Name = fileName,
+                Position = new Wire.Vector3T { X = position.x, Y = position.y, Z = position.z, },
+                Rotation = new Wire.QuaternionT { X = rotation.x, Y = rotation.y, Z = rotation.z, W = rotation.w, },
+            }));
+        }
+    }
+}

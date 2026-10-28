@@ -1,0 +1,6 @@
+{
+  "name": "Google.FlatBuffers",
+  "rootNamespace": "Google.FlatBuffers",
+  "autoReferenced": true,
+  "noEngineReferences": true
+}

@@ -2,7 +2,10 @@
   "name": "XRLumina.Runtime",
   "rootNamespace": "XRLumina",
   "references": [
-    "Unity.Collections"
+    "Unity.Collections",
+    "Google.FlatBuffers",
+    "XRLumina.Core",
+    "XRLumina.Protocol"
   ],
   "includePlatforms": [],
   "excludePlatforms": [],

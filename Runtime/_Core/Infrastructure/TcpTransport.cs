@@ -1,7 +1,9 @@
 using System;
+using PacketType = XRLumina.Protocol.Message;
 using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Threading;
+using XRLumina.Protocol;
 using XRLumina._Core.Model;
 
 namespace XRLumina._Core.Infrastructure
@@ -15,6 +17,7 @@ namespace XRLumina._Core.Infrastructure
         private const int MaxPendingPackets = 30000;
         private readonly Func<NetworkEndpoint> _resolveEndpoint;
         private readonly int _retryDelayMs;
+        private readonly bool _acceptedConnection;
         private readonly object _writeLock = new object();
         private readonly ConcurrentQueue<NetworkPacket> _pendingPackets =
             new ConcurrentQueue<NetworkPacket>();
@@ -31,7 +34,7 @@ namespace XRLumina._Core.Infrastructure
 
         public event Action Connected;
         public event Action Disconnected;
-        public event Action<NetworkPacket> PacketReceived;
+        public event Action<Envelope> MessageReceived;
         public event Action<Exception> Faulted;
 
         /// <summary>주소 해석 함수와 재접속 간격으로 TCP 전송 계층을 생성한다.</summary>
@@ -39,6 +42,13 @@ namespace XRLumina._Core.Infrastructure
         {
             _resolveEndpoint = resolveEndpoint ?? throw new ArgumentNullException(nameof(resolveEndpoint));
             _retryDelayMs = retryDelayMs;
+        }
+
+        /// <summary>USB로 접속된 로컬 TCP 연결을 공통 패킷 전송 계층에 연결한다.</summary>
+        public TcpTransport(TcpClient client)
+        {
+            _client = client ?? throw new ArgumentNullException(nameof(client));
+            _acceptedConnection = true;
         }
 
         /// <summary>백그라운드 연결 및 수신 루프를 시작한다.</summary>
@@ -180,7 +190,7 @@ namespace XRLumina._Core.Infrastructure
 
             try
             {
-                PacketCodec.Write(stream, packet.Type, packet.PayloadSegment);
+                PacketCodec.Write(stream, packet.PayloadSegment);
             }
             catch (Exception exception)
             {
@@ -206,11 +216,14 @@ namespace XRLumina._Core.Infrastructure
             {
                 try
                 {
-                    var endpoint = _resolveEndpoint();
-                    _client = new TcpClient();
+                    if (!_acceptedConnection)
+                    {
+                        var endpoint = _resolveEndpoint();
+                        _client = new TcpClient();
+                        _client.Connect(endpoint.Host, endpoint.Port);
+                    }
                     _client.NoDelay = true;
                     _client.SendTimeout = 2000;
-                    _client.Connect(endpoint.Host, endpoint.Port);
                     using (var stream = _client.GetStream())
                     {
                         lock (_writeLock)
@@ -219,9 +232,9 @@ namespace XRLumina._Core.Infrastructure
                         }
                         Connected?.Invoke();
                         _sendSignal.Set();
-                        while (_running && PacketCodec.TryRead(stream, out var packet))
+                        while (_running && PacketCodec.TryRead(stream, out var envelope))
                         {
-                            PacketReceived?.Invoke(packet);
+                            MessageReceived?.Invoke(envelope);
                         }
                     }
                 }
@@ -243,6 +256,10 @@ namespace XRLumina._Core.Infrastructure
                     Disconnected?.Invoke();
                 }
 
+                if (_acceptedConnection)
+                {
+                    break;
+                }
                 if (_running)
                 {
                     Thread.Sleep(_retryDelayMs);

@@ -5,7 +5,7 @@ using Mouse = UnityEngine.InputSystem.Mouse;
 
 namespace XRLumina.Sample
 {
-    /// <summary>Editor 키보드 이동과 VR HMD·컨트롤러 이동을 함께 제공하는 샘플 플레이어.</summary>
+    /// <summary>PC 키보드·마우스, 모바일 터치와 VR HMD·컨트롤러 이동을 제공하는 샘플 플레이어.</summary>
     [RequireComponent(typeof(CharacterController))]
     public sealed class XRLuminaSamplePlayerController : MonoBehaviour
     {
@@ -17,6 +17,12 @@ namespace XRLumina.Sample
         [SerializeField] private float respawnHeight = -2f;
         [SerializeField] private float interactionDistance = 6f;
 
+        [SerializeField] private float mobileLookSpeed = 110f;
+        [SerializeField] private bool enableMobileControls = true;
+
+        [SerializeField] private XRLuminaSampleMobileControls _mobileControls;
+        private bool _mobileActive;
+        private readonly System.Collections.Generic.List<UnityEngine.EventSystems.RaycastResult> _uiHits = new();
         private CharacterController _characterController;
         private float _pitch;
         private float _verticalVelocity;
@@ -33,17 +39,21 @@ namespace XRLumina.Sample
             _characterController = GetComponent<CharacterController>();
             _initialControllerCenter = _characterController.center;
             _spawnPosition = transform.position;
+            _mobileControls?.SetInteractionHandler(InteractFromScreenButton);
             if (playerCamera == null)
             {
                 playerCamera = Camera.main;
             }
         }
 
-        /// <summary>현재 XR 장치 상태에 따라 VR 또는 데스크톱 이동을 갱신한다.</summary>
+        /// <summary>현재 플랫폼과 XR 장치 상태에 따라 VR·모바일·데스크톱 이동을 갱신한다.</summary>
         private void Update()
         {
             InputDevice headDevice = InputDevices.GetDeviceAtXRNode(XRNode.Head);
-            _vrActive = headDevice.isValid;
+            // Editor는 HMD 시뮬레이터가 감지되어도 화면 조작을 바로 테스트할 수 있게 한다.
+            _vrActive = headDevice.isValid && !Application.isEditor;
+            _mobileActive = !_vrActive && enableMobileControls;
+            UpdateMobileControls();
 
             if (_vrActive)
             {
@@ -57,12 +67,68 @@ namespace XRLumina.Sample
                 {
                     _characterController.center = _initialControllerCenter;
                 }
-                UpdateDesktopLocomotion();
+                if (_mobileActive)
+                {
+                    if (!Application.isMobilePlatform)
+                    {
+                        UpdateDesktopLocomotion();
+                    }
+                    UpdateMobileLocomotion();
+                }
+                else
+                {
+                    UpdateDesktopLocomotion();
+                }
             }
 
             ApplyGravity();
             RestorePlayerIfFallen();
             UpdateSampleInteraction();
+        }
+
+        /// <summary>화면 조이패드를 표시하고 모바일에서만 커서를 해제한다.</summary>
+        private void UpdateMobileControls()
+        {
+            if (_mobileActive && _mobileControls == null)
+            {
+                _mobileControls = Object.FindFirstObjectByType<XRLuminaSampleMobileControls>(FindObjectsInactive.Include);
+                if (_mobileControls == null)
+                {
+                    _mobileControls = gameObject.AddComponent<XRLuminaSampleMobileControls>();
+                }
+                _mobileControls.SetInteractionHandler(InteractFromScreenButton);
+            }
+            _mobileControls?.SetVisible(_mobileActive);
+            if (_mobileActive && Application.isMobilePlatform && (_cursorCaptured || Cursor.lockState != CursorLockMode.None))
+            {
+                _cursorCaptured = false;
+                _cursorInitialized = false;
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.visible = true;
+            }
+        }
+
+        /// <summary>왼쪽 패드로 앞뒤·좌우 이동하고 오른쪽 패드로 좌우·상하 시점을 회전한다.</summary>
+        private void UpdateMobileLocomotion()
+        {
+            MovePlayer(_mobileControls.MoveInput, moveSpeed);
+            Vector2 look = _mobileControls.LookInput * (mobileLookSpeed * Time.deltaTime);
+            if (look.sqrMagnitude <= 0f)
+            {
+                return;
+            }
+            transform.Rotate(0f, look.x, 0f);
+            _pitch = Mathf.Clamp(_pitch - look.y, -80f, 80f);
+            if (playerCamera != null)
+            {
+                playerCamera.transform.localRotation = Quaternion.Euler(_pitch, 0f, 0f);
+            }
+        }
+
+        /// <summary>플레이어 조작을 끄면 남은 터치 입력과 조이패드 표시를 정리한다.</summary>
+        private void OnDisable()
+        {
+            _mobileControls?.SetVisible(false);
         }
 
         /// <summary>HMD의 로컬 위치와 회전을 플레이어 Camera에 적용한다.</summary>
@@ -135,7 +201,7 @@ namespace XRLumina.Sample
             RotateVrPlayer(turnInput.x * vrTurnSpeed * Time.deltaTime);
         }
 
-        /// <summary>방향키·WASD 이동과 우클릭 마우스 시점 회전을 적용한다.</summary>
+        /// <summary>방향키·WASD 이동과 커서 캡처 또는 우클릭 드래그 시점 회전을 적용한다.</summary>
         private void UpdateDesktopLocomotion()
         {
             UpdateCursorCapture();
@@ -167,7 +233,7 @@ namespace XRLumina.Sample
             MovePlayer(moveInput, speed);
 
             Mouse mouse = Mouse.current;
-            if (_cursorCaptured && mouse != null)
+            if (mouse != null && (_cursorCaptured || (_mobileActive && mouse.rightButton.isPressed && !IsMouseOverUi())))
             {
                 Vector2 lookInput = mouse.delta.ReadValue() * (mouseSensitivity * 0.05f);
                 transform.Rotate(0f, lookInput.x, 0f);
@@ -196,10 +262,28 @@ namespace XRLumina.Sample
                 Cursor.lockState = CursorLockMode.None;
                 Cursor.visible = true;
             }
-            else if (mouse != null && mouse.leftButton.wasPressedThisFrame)
+            else if (mouse != null && mouse.leftButton.wasPressedThisFrame && !IsMouseOverUi())
             {
                 CaptureCursor();
             }
+        }
+
+        /// <summary>현재 마우스 위치의 UI를 검사하여 조이패드·버튼 클릭이 커서 잠금이나 타깃 실행으로 이어지지 않게 한다.</summary>
+        private bool IsMouseOverUi()
+        {
+            var eventSystem = UnityEngine.EventSystems.EventSystem.current;
+            Mouse mouse = Mouse.current;
+            if (eventSystem == null || mouse == null)
+            {
+                return false;
+            }
+            var pointer = new UnityEngine.EventSystems.PointerEventData(eventSystem)
+            {
+                position = mouse.position.ReadValue(),
+            };
+            _uiHits.Clear();
+            eventSystem.RaycastAll(pointer, _uiHits);
+            return _uiHits.Count > 0;
         }
 
         /// <summary>마우스 이동값이 시점 회전에 전달되도록 커서를 Game View에 고정한다.</summary>
@@ -266,6 +350,10 @@ namespace XRLumina.Sample
         /// <summary>데스크톱과 VR 입력으로 샘플 타깃 및 입력 이벤트를 기록한다.</summary>
         private void UpdateSampleInteraction()
         {
+            if (_mobileActive && Application.isMobilePlatform)
+            {
+                return;
+            }
             if (_vrActive)
             {
                 InputDevice rightController = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
@@ -282,8 +370,17 @@ namespace XRLumina.Sample
             Keyboard keyboard = Keyboard.current;
             Mouse mouse = Mouse.current;
             bool keyboardInteraction = keyboard != null && keyboard.eKey.wasPressedThisFrame;
-            bool mouseInteraction = _cursorCaptured && mouse != null && mouse.leftButton.wasPressedThisFrame;
+            bool mouseInteraction = _cursorCaptured && mouse != null && mouse.leftButton.wasPressedThisFrame && !IsMouseOverUi();
             if (keyboardInteraction || mouseInteraction)
+            {
+                TryInteractWithTarget();
+            }
+        }
+
+        /// <summary>화면 클릭 버튼으로 기존 마우스·E키와 동일한 타깃 상호작용을 실행한다.</summary>
+        public void InteractFromScreenButton()
+        {
+            if (isActiveAndEnabled && _mobileActive)
             {
                 TryInteractWithTarget();
             }

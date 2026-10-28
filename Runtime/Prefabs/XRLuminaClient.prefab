@@ -54,6 +54,8 @@ MonoBehaviour:
   body: {fileID: 0}
   discoveryTimeoutMs: 800
   retryDelayMs: 1500
+  usbEnabled: 1
+  usbPort: 10000
 --- !u!114 &11400001
 MonoBehaviour:
   m_ObjectHideFlags: 0
